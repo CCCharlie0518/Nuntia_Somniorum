@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.1.2';
+const APP_VERSION = 'v8.1.3';
 
 /* =========================================================
  * 一、基础工具函数
@@ -7054,34 +7054,36 @@ function applyBeautify() {
  * ========================================================= */
 const CS_TEMPLATES = {
   bubble: `/* ─── 我发出的气泡 ─── */
-#page-chat .msg.mine .bubble {
-    background: transparent;
-    color: #fff;
-    border-radius: 18px 18px 6px 18px;
-    padding: 8px 16px;
-    box-shadow: 0 2px 10px rgba(0,0,0,.08);
-    border: none;
+.msg.mine .bubble {
+    background: ;
+    color: ;
+    border-radius: ;
+    padding: ;
+    box-shadow: ;
+    border: ;
     backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
 }
 
 /* ─── TA 发出的气泡 ─── */
-#page-chat .msg.theirs .bubble {
-    background: rgba(255,255,255,.1);
-    color: #fff;
-    border-radius: 18px 18px 18px 6px;
-    padding: 8px 16px;
-    box-shadow: 0 2px 10px rgba(0,0,0,.08);
-    border: none;
+.msg.theirs .bubble {
+    background: ;
+    color: ;
+    border-radius: ;
+    padding: ;
+    box-shadow: ;
+    border: ;
     backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
 }`,
   font: `/* ─── 聊天文字样式（同时作用于我和 TA 的气泡） ─── */
-#page-chat .msg .bubble {
-    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-    font-size: 15px;
-    font-weight: 400;
-    color: #fff;
-    line-height: 1.6;
-    letter-spacing: 0.3px;
+.msg .bubble {
+    font-family: ;
+    font-size: ;
+    font-weight: ;
+    color: ;
+    line-height: ;
+    letter-spacing: ;
 }`
 };
 
