@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.1.3';
+const APP_VERSION = 'v8.2.0';
 
 /* =========================================================
  * 一、基础工具函数
@@ -2027,6 +2027,7 @@ function previewOf(m, role) {
   if (m.type === 'call') return '[通话] ' + callSummary(m.call);
   if (m.type === 'redpacket') return '[转账] ¥' + Number(m.amount || 0).toFixed(2) + ' ' + (m.blessing || '');
   if (m.type === 'gift') return '[礼物] ' + (m.giftName || '');
+  if (m.type === 'location') return '[定位] ' + (m.name || '');
   if (m.type === 'readInvite') return '[一起读书] ' + ((m.status || 'pending') === 'accepted' ? '共读邀请已接受' : (m.status === 'rejected' ? '共读邀请已拒绝' : '共读邀请'));
   /* 系统提示等旧存文本中的「TA」按当前梦角名字动态替换显示 */
   if (m.role === 'system') return String(m.content || '').replace(/TA/g, dn);
@@ -2625,6 +2626,7 @@ function quoteTextOf(m) {
   if (m.type === 'sticker') return '[表情]';
   if (m.type === 'redpacket') return '[转账] ¥' + Number(m.amount || 0).toFixed(2);
   if (m.type === 'gift') return '[礼物] ' + (m.giftName || '');
+  if (m.type === 'location') return '[定位] ' + (m.name || '');
   if (m.type === 'call') return '[通话]';
   if (m.type === 'quiz') return '[问卷]';
   if (m.type === 'quizAnswer') return '[问卷回答]';
@@ -2644,6 +2646,7 @@ function copyTextOf(m) {
   }
   if (m.type === 'redpacket') return '[转账] ¥' + Number(m.amount || 0).toFixed(2);
   if (m.type === 'gift') return '[礼物] ' + (m.giftName || '');
+  if (m.type === 'location') return '[定位] ' + (m.name || '');
   if (m.type === 'call') return '[通话]';
   if (m.type === 'quiz') return (m.quiz && m.quiz.title) ? ('[问卷] ' + m.quiz.title) : '[问卷]';
   if (m.type === 'quizAnswer') return (m.quiz && m.quiz.title) ? ('[问卷回答] ' + m.quiz.title) : '[问卷回答]';
@@ -2730,6 +2733,7 @@ function renderChatPage(roleId) {
         <button class="plus-cell" data-plus="quiz"><span>${APP_ICONS.quizzes}</span>问卷</button>
         <button class="plus-cell" data-plus="ledger"><span>${APP_ICONS.ledger}</span>记账</button>
         <button class="plus-cell" data-plus="snapshot"><span>${APP_ICONS.snapshots}</span>留影</button>
+        <button class="plus-cell" data-plus="location"><span>${APP_ICONS.location}</span>定位</button>
         <button class="plus-cell" data-plus="read"><span>${APP_ICONS.readtogether}</span>邀请一起读</button>
       </div>
     </div>
@@ -2825,6 +2829,7 @@ function renderChatPage(roleId) {
     else if (kind === 'gift') openGiftComposer(roleId);
     else if (kind === 'ledger') enterLedgerMode(roleId);
     else if (kind === 'snapshot') setChatSelectMode(true);
+    else if (kind === 'location') openLocationComposer(roleId);
     else if (kind === 'read') inviteReadTogether(roleId, 'chat');
     else if (kind === 'quiz') { pendingQuizRoleId = roleId; navigate({ page: 'sub', name: 'quiz-new' }); }
   }));
@@ -2864,6 +2869,58 @@ function renderChatPage(roleId) {
      避免「一次性建 DOM」和页面切换抢同一帧，导致点进来先卡住、后显示 */
   requestAnimationFrame(() => {
     if (currentRoute.page === 'chat' && currentRoute.roleId === roleId) renderChatMessages();
+  });
+}
+
+/* =========================================================
+ * 发送定位：「+」面板 → 弹窗选地点（预设 + 自定义名称/Emoji）→ 发定位卡片
+ * 消息结构：{ type:'location', name, emoji, content:'[定位] xx' }
+ * 走 sendUserMessage 统一入口：自动持久化、触发 TA 延迟回复（沿用「正在输入」动画）、拾光瓶集星
+ * ========================================================= */
+const LOC_PRESETS = [
+  { name: '家', emoji: '🏠' },
+  { name: '学校', emoji: '🏫' },
+  { name: '公司', emoji: '🏢' },
+  { name: '医院', emoji: '🏥' },
+  { name: '公园', emoji: '🌳' }
+];
+function openLocationComposer(roleId) {
+  if (!roleById(roleId)) return;
+  const modal = showModal({
+    title: '发送定位',
+    body: `
+      <div class="loc-presets">
+        ${LOC_PRESETS.map(p => `<button class="loc-preset" data-locname="${esc(p.name)}" data-locemoji="${p.emoji}"><span class="le">${p.emoji}</span>${esc(p.name)}</button>`).join('')}
+      </div>
+      <div class="loc-fields">
+        <input class="loc-input grow" id="locNameInput" maxlength="20" placeholder="地点名称，如：街角的咖啡店">
+        <input class="loc-input slim" id="locEmojiInput" type="text" maxlength="4" placeholder="输入Emoji" value="📍">
+      </div>
+      <button class="loc-send" id="locSendBtn">发送</button>`
+  });
+  const root = modal.el;
+  const nameInput = $('#locNameInput', root);
+  const emojiInput = $('#locEmojiInput', root);
+
+  /* 点预设：自动把地点名和 Emoji 填入下方两个输入框 */
+  $$('.loc-preset', root).forEach(btn => btn.addEventListener('click', () => {
+    $$('.loc-preset', root).forEach(b => b.classList.toggle('sel', b === btn));
+    if (nameInput) nameInput.value = btn.dataset.locname;
+    if (emojiInput) emojiInput.value = btn.dataset.locemoji;
+  }));
+
+  /* 手动改动任一输入框 → 取消预设高亮（内容已与预设不一致） */
+  [nameInput, emojiInput].forEach(el => {
+    if (el) el.addEventListener('input', () => $$('.loc-preset', root).forEach(b => b.classList.remove('sel')));
+  });
+
+  $('#locSendBtn', root).addEventListener('click', () => {
+    const name = String((nameInput && nameInput.value) || '').trim();
+    if (!name) { showToast('先选一个地点或输入地点名称'); return; }
+    const emoji = String((emojiInput && emojiInput.value) || '').trim() || '📍';  /* Emoji 留空时兜底 📍 */
+    modal.close();
+    /* content 作为兜底预览文本（会话列表 / 引用 / 复制降级都读它），卡片渲染走 name+emoji */
+    sendUserMessage(roleId, { type: 'location', name, emoji, content: '[定位] ' + name });
   });
 }
 
@@ -3147,6 +3204,14 @@ function renderChatMessages() {
         <div class="ri-title">📖 共读邀请</div>
         <div class="ri-sub">${esc(subTxt)}</div>
         ${lastRow}
+      </div>`;
+    } else if (m.type === 'location') {
+      /* 定位卡片：📍 +「定位」标题 / 分割线 / Emoji + 地点名 */
+      inner = `<div class="bubble loc-bubble">
+        ${quoteHTML}
+        <div class="loc-head"><span class="loc-pin">📍</span>定位</div>
+        <div class="loc-divider"></div>
+        <div class="loc-place"><span class="loc-place-emoji">${esc(m.emoji || '📍')}</span><span class="loc-place-name">${esc(m.name || '未知地点')}</span></div>
       </div>`;
     } else {
       /* 普通文字 / 图文混合消息：images 数组非空时图片在上、文字在下 */
@@ -4729,6 +4794,8 @@ const APP_ICONS = {
   coin: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.6v8.8M9.6 10h3.6a1.6 1.6 0 0 1 0 3.2H9.8a1.6 1.6 0 0 0 0 3.2h4"/></svg>',
   linktest: '<svg viewBox="0 0 24 24"><path d="M9.4 14.6 14.6 9.4"/><path d="M10.8 7.6 12.2 6.2a3.6 3.6 0 0 1 5.1 5.1l-1.4 1.4M13.2 16.4l-1.4 1.4a3.6 3.6 0 0 1-5.1-5.1l1.4-1.4"/></svg>',
   gifts: '<svg viewBox="0 0 24 24"><rect x="3.4" y="9.4" width="17.2" height="10.4" rx="1.8"/><path d="M2.6 9.4h18.8v3.4H2.6ZM12 9.4v10.4M12 9.4C10.4 5.2 6.4 5 6.4 7.2c0 1.4 2.6 2.2 5.6 2.2Zm0 0c1.6-4.2 5.6-4.4 5.6-2.2 0 1.4-2.6 2.2-5.6 2.2Z"/></svg>',
+  /* 定位：线条风地图图钉 */
+  location: '<svg viewBox="0 0 24 24"><path d="M12 21s-6.6-5.4-6.6-10.2A6.6 6.6 0 0 1 12 4.2a6.6 6.6 0 0 1 6.6 6.6C18.6 15.6 12 21 12 21Z"/><circle cx="12" cy="10.8" r="2.4"/></svg>',
   pat: '<svg viewBox="0 0 24 24"><path d="M9.3 11.6V6.6a1.7 1.7 0 0 1 3.4 0v4.4"/><path d="M12.7 9.2h1.2a1.6 1.6 0 0 1 1.6 1.6v1h.9a1.7 1.7 0 0 1 1.7 1.7v1.9a4.7 4.7 0 0 1-4.7 4.7h-1.9a4.4 4.4 0 0 1-3.5-1.8l-2.7-3.5a1.4 1.4 0 0 1 2.1-1.8l1.9 1.5"/></svg>',
   /* 小游戏：线条风游戏机 */
   games: '<svg viewBox="0 0 24 24"><path d="M7.2 8.4h9.6a4.6 4.6 0 0 1 4.5 5.5l-.6 2.9a2.7 2.7 0 0 1-4.6 1.3l-1.3-1.5a1.7 1.7 0 0 0-1.3-.6h-3a1.7 1.7 0 0 0-1.3.6l-1.3 1.5a2.7 2.7 0 0 1-4.6-1.3l-.6-2.9A4.6 4.6 0 0 1 7.2 8.4Z"/><path d="M8.7 11v3.2M7.1 12.6h3.2"/><circle cx="15.6" cy="11.5" r=".9"/><circle cx="17.5" cy="13.5" r=".9"/></svg>',
@@ -7076,14 +7143,14 @@ const CS_TEMPLATES = {
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
 }`,
-  font: `/* ─── 聊天文字样式（同时作用于我和 TA 的气泡） ─── */
-.msg .bubble {
-    font-family: ;
-    font-size: ;
-    font-weight: ;
-    color: ;
-    line-height: ;
-    letter-spacing: ;
+  font: `/* ─── 全局字体样式 ─── */
+*:not(svg):not(i) {
+    font-family: ; /* 填你想要的字体，如 'PingFang SC', sans-serif */
+    color: ; /* 填全局文字颜色，如 #333 */
+    font-size: ; /* 填全局基础字号，如 14px */
+    font-weight: ; /* 填字重，如 400 或 bold */
+    line-height: ; /* 填行高，如 1.5 */
+    letter-spacing: ; /* 填字间距，如 0.5px */
 }`
 };
 
@@ -7277,6 +7344,8 @@ function csScopeSelectorToChat(head) {
   return head.split(',').map(s => {
     const t = s.trim();
     if (!t) return '';
+    /* 通配符开头（如 *:not(svg):not(i)）视为用户明确要全局生效（全局字体模板），不加 #page-chat 前缀 */
+    if (t.startsWith('*')) return t;
     if (/^(?:body|html|:root)\b/i.test(t)) return t.replace(/^(?:body|html|:root)\b/i, '#page-chat');
     if (/^#page-chat\b/i.test(t)) return t;
     return '#page-chat ' + t;
