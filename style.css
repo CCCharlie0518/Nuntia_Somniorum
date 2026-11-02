@@ -3515,26 +3515,30 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
 }
 .loc-send:active{opacity:.85;}
 
-/* —— 聊天记录中的定位卡片：尺寸/留白与转账卡片严格一致 —— */
+/* —— 聊天记录中的定位卡片：尺寸与转账卡片一致，外观锁定为转账卡「未接收（深色）」状态 —— */
 .bubble.loc-bubble{
   width:200px !important;height:auto !important;
   padding:12px 16px !important;box-sizing:border-box !important;
   display:flex !important;flex-direction:column;justify-content:flex-start !important;gap:8px !important;
-  background:#fff !important;color:var(--text) !important;
+  /* 与 .redpacket-bubble 深色状态完全同款的背景：主题色 + 暗色渐变叠层 + 主题色阴影 */
+  background-color:var(--theme-card-dark,var(--primary)) !important;
+  background-image:linear-gradient(var(--theme-card-shade,rgba(0,0,0,.10)),var(--theme-card-shade,rgba(0,0,0,.10))) !important;
+  color:#fff !important;
   border-radius:16px !important;
-  overflow:hidden;box-shadow:0 2px 10px rgba(24,44,74,.08);
+  overflow:hidden;box-shadow:0 3px 10px rgba(var(--primary-rgb),.22);
   text-align:left;
 }
 .loc-head{
   display:flex;align-items:center;gap:6px;
-  font-size:16px;font-weight:700;color:#1b1d21;line-height:1.2;
+  font-size:16px;font-weight:700;color:#fff !important;line-height:1.2;
 }
 .loc-head .loc-pin{font-size:17px;line-height:1;}
-.loc-divider{width:100%;height:1px;background:var(--line);margin:4px 0 !important;flex-shrink:0;}
+/* 分割线：半透明白，在深色背景上呈现最干净的层次 */
+.loc-divider{width:100%;height:1px;background:rgba(255,255,255,.4) !important;margin:4px 0 !important;flex-shrink:0;}
 .loc-place{
   display:flex;align-items:flex-start;gap:6px;
-  font-size:13px;color:#5f6672;line-height:1.4;
+  font-size:13px;color:#fff !important;line-height:1.4;
   word-break:break-all;
 }
 .loc-place-emoji{flex-shrink:0;font-size:14px;line-height:1.4;}
-.loc-place-name{flex:1;min-width:0;}
+.loc-place-name{flex:1;min-width:0;color:#fff !important;}
