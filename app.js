@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.1.1';
+const APP_VERSION = 'v8.1.2';
 
 /* =========================================================
  * 一、基础工具函数
@@ -7053,22 +7053,35 @@ function applyBeautify() {
  *         Toast（#toast）与来电弹窗（#callLayer）都在 #page-chat 之外，物理隔离。
  * ========================================================= */
 const CS_TEMPLATES = {
-  bubble: `/* 请将 .your-bubble-class 替换为你网页实际的气泡类名 */
-.your-bubble-class {
-    background: rgba(255, 192, 203, 0.5);
-    color: #333;
-    border-radius: 18px;
+  bubble: `/* ─── 我发出的气泡 ─── */
+#page-chat .msg.mine .bubble {
+    background: transparent;
+    color: #fff;
+    border-radius: 18px 18px 6px 18px;
     padding: 8px 16px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    box-shadow: 0 2px 10px rgba(0,0,0,.08);
+    border: none;
+    backdrop-filter: blur(10px);
+}
+
+/* ─── TA 发出的气泡 ─── */
+#page-chat .msg.theirs .bubble {
+    background: rgba(255,255,255,.1);
+    color: #fff;
+    border-radius: 18px 18px 18px 6px;
+    padding: 8px 16px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.08);
+    border: none;
+    backdrop-filter: blur(10px);
 }`,
-  font: `/* 请将 .your-text-class 替换为你网页实际的文字类名 */
-.your-text-class {
-    font-family: "Songti SC", serif;
+  font: `/* ─── 聊天文字样式（同时作用于我和 TA 的气泡） ─── */
+#page-chat .msg .bubble {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
     font-size: 15px;
-    font-weight: 500;
-    color: #333;
-    line-height: 1.5;
-    letter-spacing: 0.5px;
+    font-weight: 400;
+    color: #fff;
+    line-height: 1.6;
+    letter-spacing: 0.3px;
 }`
 };
 
