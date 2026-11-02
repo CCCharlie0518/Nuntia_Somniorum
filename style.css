@@ -3641,8 +3641,18 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
 .csch-item-text mark{
   background:rgba(255,204,0,.55);color:inherit;border-radius:2px;padding:0 1px;
 }
+/* 搜索结果发送者前缀：加粗，「我」深灰、「TA」主题色 */
+.csch-sender{font-weight:600;margin-right:2px;}
+.csch-sender.mine{color:#5f6672;}
+.csch-sender.ta{color:var(--primary);}
 .csch-item-time{font-size:11px;color:#8E8E93;margin-top:4px;}
 .csch-empty{padding:64px 20px;text-align:center;font-size:13px;color:#8E8E93;}
+/* 搜索结果分页「加载更多」按钮 */
+.csch-more{
+  display:block;width:100%;padding:13px 12px;
+  font-size:13px;font-weight:500;color:var(--primary);text-align:center;
+}
+.csch-more:active{opacity:.6;}
 
 /* 跳转高亮：气泡外圈暖色光环连闪两次后消退（配合 JS 2 秒后移除类名） */
 @keyframes highlightMsgGlow{

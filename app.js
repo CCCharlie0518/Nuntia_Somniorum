@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.3.0';
+const APP_VERSION = 'v8.3.1';
 
 /* =========================================================
  * 一、基础工具函数
@@ -2823,16 +2823,22 @@ function renderChatPage(roleId) {
   });
   const cschInput = $('#chatSearchInput');
   if (cschInput) {
-    cschInput.addEventListener('input', () => renderChatSearchResults(roleId, cschInput.value));
+    /* 输入防抖 300ms：停止输入后才执行全量搜索；回车立即搜索 */
+    cschInput.addEventListener('input', () => scheduleChatSearch(roleId, cschInput.value));
     cschInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); renderChatSearchResults(roleId, cschInput.value); }
+      if (e.key === 'Enter') { e.preventDefault(); runChatSearch(roleId, cschInput.value); }
     });
   }
   const cschCancel = $('#chatSearchCancel');
   if (cschCancel) cschCancel.addEventListener('click', () => closeChatSearch());
-  /* 结果列表点击委托：跳到对应消息并高亮 */
+  /* 结果列表点击委托：加载更多 / 跳到对应消息并高亮 */
   const cschList = $('#search-results-list');
   if (cschList) cschList.addEventListener('click', e => {
+    if (e.target.closest('.csch-more')) {
+      searchRenderLimit += SEARCH_PAGE_SIZE;
+      renderChatSearchResults(roleId);
+      return;
+    }
     const item = e.target.closest('[data-jumpmid]');
     if (item) jumpToChatMessage(roleId, item.dataset.jumpmid);
   });
@@ -3320,10 +3326,38 @@ function renderChatMessages() {
 /* ===================== 聊天页「搜索聊天记录」 =====================
    入口在聊天页右上角三点菜单；遮罩层 DOM 随 renderChatPage 模板一起渲染，
    离开/重进聊天页时模板重建，搜索状态自动清空，无需额外路由清理 */
+/* 搜索性能优化：全量搜索 + 分页渲染
+   内存里永远保存完整结果集 currentSearchResults（不截断，保证搜全），
+   DOM 只渲染前 searchRenderLimit 条，底部「加载更多」按钮每次 +20 */
+let currentSearchResults = [];      /* 当前关键词的全量匹配结果 */
+let currentSearchKeyword = '';      /* 当前关键词（结果高亮与加载更多时复用） */
+let searchRenderLimit = 20;         /* 当前已渲染到 DOM 的条数 */
+const SEARCH_PAGE_SIZE = 20;        /* 每页渲染条数 / 加载更多步长 */
+let searchDebounceTimer = 0;        /* 输入防抖计时器 */
+
+/* 输入防抖：停止输入 300ms 后才真正执行搜索，避免长记录逐字全量匹配造成卡顿 */
+function scheduleChatSearch(roleId, kw) {
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => runChatSearch(roleId, kw), 300);
+}
+
+/* 全量搜索：一次性找出所有匹配消息存入内存（不截断），只把渲染窗口重置为第一页 */
+function runChatSearch(roleId, kwRaw) {
+  clearTimeout(searchDebounceTimer);
+  currentSearchKeyword = String(kwRaw || '').trim();
+  currentSearchResults = currentSearchKeyword ? chatSearchMatches(roleId, currentSearchKeyword) : [];
+  searchRenderLimit = SEARCH_PAGE_SIZE;
+  renderChatSearchResults(roleId);
+}
+
 function openChatSearch(roleId) {
   const layer = $('#chat-search-layer');
   if (!layer) return;
-  renderChatSearchResults(roleId, '');
+  /* 重置上一轮搜索状态后再渲染空态 */
+  currentSearchKeyword = '';
+  currentSearchResults = [];
+  searchRenderLimit = SEARCH_PAGE_SIZE;
+  renderChatSearchResults(roleId);
   layer.classList.add('open');
   /* 等滑入动画起步后再聚焦，避免移动端键盘弹出打断动画 */
   const input = $('#chatSearchInput');
@@ -3331,12 +3365,16 @@ function openChatSearch(roleId) {
 }
 
 function closeChatSearch() {
+  clearTimeout(searchDebounceTimer);
   const layer = $('#chat-search-layer');
   if (!layer) return;
   layer.classList.remove('open');
   const input = $('#chatSearchInput');
   if (input) { input.value = ''; input.blur(); }
-  renderChatSearchResults(currentRoute.roleId, '');
+  currentSearchKeyword = '';
+  currentSearchResults = [];
+  searchRenderLimit = SEARCH_PAGE_SIZE;
+  renderChatSearchResults(currentRoute.roleId);
 }
 
 /* 只匹配「纯文本可检索」的消息：text / content 字段非空；
@@ -3369,32 +3407,46 @@ function markKeyword(escapedText, kwRaw) {
   return out;
 }
 
-function renderChatSearchResults(roleId, kwRaw) {
+/* 分页渲染：DOM 只画 currentSearchResults 的前 searchRenderLimit 条；
+   未渲染完时底部追加「加载更多（当前已展示 x/总数 y）」按钮，点击后 +20 重新渲染 */
+function renderChatSearchResults(roleId) {
   const box = $('#search-results-list');
   if (!box) return;
-  const kw = String(kwRaw || '').trim();
+  const kw = currentSearchKeyword;
   if (!kw) {
     box.innerHTML = '<div class="csch-empty">输入关键词搜索聊天记录</div>';
     return;
   }
-  const hits = chatSearchMatches(roleId, kw);
-  if (!hits.length) {
+  const total = currentSearchResults.length;
+  if (!total) {
     box.innerHTML = '<div class="csch-empty">暂无搜索结果</div>';
     return;
   }
+  const shown = Math.min(searchRenderLimit, total);
   const kwL = kw.toLowerCase();
-  box.innerHTML = hits.map(m => {
+  /* 发送者标识：直接复用全局归一化函数 wcMsgSender（兼容 role/sender/who/isUser 多种落库写法），
+     返回 'user'（我）或 'ta'（梦角）；数据库无论用哪种字段都能正确区分 */
+  const roleName = esc((roleById(roleId) || {}).name || 'TA');
+  let html = currentSearchResults.slice(0, shown).map(m => {
     const text = String(typeof m.content === 'string' ? m.content : m.text || '');
     /* 以首个命中点为中心截取片段，避免超长消息撑爆结果行 */
     const idx = text.toLowerCase().indexOf(kwL);
     const from = Math.max(0, idx - 12);
     const to = Math.min(text.length, idx + kw.length + 24);
     const raw = (from > 0 ? '…' : '') + text.slice(from, to) + (to < text.length ? '…' : '');
+    const isMine = wcMsgSender(m) === 'user';
+    const senderTag = isMine
+      ? '<span class="csch-sender mine">我：</span>'
+      : `<span class="csch-sender ta">${roleName}：</span>`;
     return `<div class="csch-item" data-jumpmid="${m.id}">
-      <div class="csch-item-text">${markKeyword(esc(raw), kw)}</div>
+      <div class="csch-item-text">${senderTag}${markKeyword(esc(raw), kw)}</div>
       <div class="csch-item-time">${fmtMsgTime(m.ts)}</div>
     </div>`;
   }).join('');
+  if (total > shown) {
+    html += `<button type="button" class="csch-more">加载更多（当前已展示 ${shown}/${total}）</button>`;
+  }
+  box.innerHTML = html;
 }
 
 /* 点击结果：关层 → 确保消息已渲染（分页窗口不够就先扩大）→ 平滑滚动居中 → 高亮 2 秒 */
