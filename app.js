@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.2.0';
+const APP_VERSION = 'v8.3.0';
 
 /* =========================================================
  * 一、基础工具函数
@@ -2695,6 +2695,9 @@ function bumpChatGen(roleId) {
   chatGenMap.set(roleId, (chatGenMap.get(roleId) || 0) + 1);
 }
 
+/* 搜索聊天记录：线条风放大镜图标（菜单项与搜索框内共用） */
+const CHAT_SEARCH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>';
+
 function renderChatPage(roleId) {
   const role = roleById(roleId);
   if (!role) { currentRoute = { page: 'messages' }; applyRoute(); return; }
@@ -2718,11 +2721,19 @@ function renderChatPage(roleId) {
       <button class="nav-ico" id="btnChatMenu" title="快捷菜单" aria-label="快捷菜单">${APP_ICONS.kebab}</button>
     </div>
     <div class="chat-kebab" id="chatKebabMenu">
+      <button data-chatsearch>${CHAT_SEARCH_ICON}<span>搜索聊天记录</span></button>
       <button data-kebab="cards">${APP_ICONS.cards}<span>字卡库</span></button>
       <button data-kebab="pat">${APP_ICONS.pat}<span>拍一拍设置</span></button>
       <button data-kebab="probability">${APP_ICONS.probability}<span>概率与行为</span></button>
       <button data-kebab="stickers">${APP_ICONS.stickers}<span>表情包管理</span></button>
       <button data-kebab="wordcloud">${APP_ICONS.wordcloud}<span>互动词云</span></button>
+    </div>
+    <div class="chat-search-layer" id="chat-search-layer">
+      <div class="csch-bar">
+        <div class="csch-input-wrap">${CHAT_SEARCH_ICON}<input id="chatSearchInput" type="search" placeholder="搜索聊天记录" autocomplete="off"></div>
+        <button class="csch-cancel" id="chatSearchCancel" type="button">取消</button>
+      </div>
+      <div class="csch-results" id="search-results-list"><div class="csch-empty">输入关键词搜索聊天记录</div></div>
     </div>
     <div class="chat-scroll" id="chatScroll"><div class="chat-list" id="chatList"></div></div>
     <div class="img-draft-bar" id="imgDraftBar"><div class="img-draft-list" id="imgDraftList"></div></div>
@@ -2804,6 +2815,27 @@ function renderChatPage(roleId) {
     kebab.classList.remove('open');
     navigate({ page: 'sub', name: btn.dataset.kebab });
   }));
+  /* 【搜索聊天记录】菜单项：不走二级页 navigate，单独打开聊天页内的搜索遮罩层 */
+  const searchEntry = $('[data-chatsearch]', kebab);
+  if (searchEntry) searchEntry.addEventListener('click', () => {
+    kebab.classList.remove('open');
+    openChatSearch(roleId);
+  });
+  const cschInput = $('#chatSearchInput');
+  if (cschInput) {
+    cschInput.addEventListener('input', () => renderChatSearchResults(roleId, cschInput.value));
+    cschInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); renderChatSearchResults(roleId, cschInput.value); }
+    });
+  }
+  const cschCancel = $('#chatSearchCancel');
+  if (cschCancel) cschCancel.addEventListener('click', () => closeChatSearch());
+  /* 结果列表点击委托：跳到对应消息并高亮 */
+  const cschList = $('#search-results-list');
+  if (cschList) cschList.addEventListener('click', e => {
+    const item = e.target.closest('[data-jumpmid]');
+    if (item) jumpToChatMessage(roleId, item.dataset.jumpmid);
+  });
   /* 右上角电话图标：发起原有「我打给TA」拨号流程 */
   $('#btnCallNav').addEventListener('click', () => startOutgoingCall(roleId));
   /* 输入框右侧内侧：表情包（弹原有表情面板）与发图片（选择方式） */
@@ -3206,12 +3238,16 @@ function renderChatMessages() {
         ${lastRow}
       </div>`;
     } else if (m.type === 'location') {
-      /* 定位卡片：📍 +「定位」标题 / 分割线 / Emoji + 地点名 */
+      /* 定位卡片：标题 + 分割线 + 地图底纹区（网格底纹 / 居中图钉 / 底部地名标签） */
       inner = `<div class="bubble loc-bubble">
         ${quoteHTML}
-        <div class="loc-head"><span class="loc-pin">📍</span>定位</div>
+        <div class="loc-header">定位</div>
         <div class="loc-divider"></div>
-        <div class="loc-place"><span class="loc-place-emoji">${esc(m.emoji || '📍')}</span><span class="loc-place-name">${esc(m.name || '未知地点')}</span></div>
+        <div class="loc-map-area">
+          <div class="loc-map-bg"></div>
+          <div class="loc-pin">📍</div>
+          <div class="loc-name">${esc(m.emoji || '📍')} ${esc(m.name || '未知地点')}</div>
+        </div>
       </div>`;
     } else {
       /* 普通文字 / 图文混合消息：images 数组非空时图片在上、文字在下 */
@@ -3279,6 +3315,105 @@ function renderChatMessages() {
       if (sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 120) sc.scrollTop = sc.scrollHeight;
     }, 80);
   }
+}
+
+/* ===================== 聊天页「搜索聊天记录」 =====================
+   入口在聊天页右上角三点菜单；遮罩层 DOM 随 renderChatPage 模板一起渲染，
+   离开/重进聊天页时模板重建，搜索状态自动清空，无需额外路由清理 */
+function openChatSearch(roleId) {
+  const layer = $('#chat-search-layer');
+  if (!layer) return;
+  renderChatSearchResults(roleId, '');
+  layer.classList.add('open');
+  /* 等滑入动画起步后再聚焦，避免移动端键盘弹出打断动画 */
+  const input = $('#chatSearchInput');
+  if (input) setTimeout(() => { input.value = ''; input.focus(); }, 120);
+}
+
+function closeChatSearch() {
+  const layer = $('#chat-search-layer');
+  if (!layer) return;
+  layer.classList.remove('open');
+  const input = $('#chatSearchInput');
+  if (input) { input.value = ''; input.blur(); }
+  renderChatSearchResults(currentRoute.roleId, '');
+}
+
+/* 只匹配「纯文本可检索」的消息：text / content 字段非空；
+   图片、表情包、定位、转账、礼物、问卷、共读、通话、拍一拍等卡片类消息没有文本字段，天然被过滤 */
+function chatSearchMatches(roleId, kwRaw) {
+  const kw = String(kwRaw || '').trim().toLowerCase();
+  if (!kw) return [];
+  return chatOf(roleId).filter(m => {
+    if (!m || m.recalled) return false;
+    const text = typeof m.content === 'string' ? m.content
+      : (typeof m.text === 'string' ? m.text : '');
+    if (!text.trim()) return false;
+    return text.toLowerCase().includes(kw);
+  });
+}
+
+/* 在转义后的文本里做不区分大小写的 <mark> 包裹（关键词同样转义后再匹配，索引才对得上） */
+function markKeyword(escapedText, kwRaw) {
+  const kw = esc(String(kwRaw || '').trim());
+  if (!kw) return escapedText;
+  const lower = escapedText.toLowerCase();
+  const k = kw.toLowerCase();
+  let out = '', i = 0;
+  for (;;) {
+    const j = lower.indexOf(k, i);
+    if (j < 0) { out += escapedText.slice(i); break; }
+    out += escapedText.slice(i, j) + '<mark>' + escapedText.slice(j, j + k.length) + '</mark>';
+    i = j + k.length;
+  }
+  return out;
+}
+
+function renderChatSearchResults(roleId, kwRaw) {
+  const box = $('#search-results-list');
+  if (!box) return;
+  const kw = String(kwRaw || '').trim();
+  if (!kw) {
+    box.innerHTML = '<div class="csch-empty">输入关键词搜索聊天记录</div>';
+    return;
+  }
+  const hits = chatSearchMatches(roleId, kw);
+  if (!hits.length) {
+    box.innerHTML = '<div class="csch-empty">暂无搜索结果</div>';
+    return;
+  }
+  const kwL = kw.toLowerCase();
+  box.innerHTML = hits.map(m => {
+    const text = String(typeof m.content === 'string' ? m.content : m.text || '');
+    /* 以首个命中点为中心截取片段，避免超长消息撑爆结果行 */
+    const idx = text.toLowerCase().indexOf(kwL);
+    const from = Math.max(0, idx - 12);
+    const to = Math.min(text.length, idx + kw.length + 24);
+    const raw = (from > 0 ? '…' : '') + text.slice(from, to) + (to < text.length ? '…' : '');
+    return `<div class="csch-item" data-jumpmid="${m.id}">
+      <div class="csch-item-text">${markKeyword(esc(raw), kw)}</div>
+      <div class="csch-item-time">${fmtMsgTime(m.ts)}</div>
+    </div>`;
+  }).join('');
+}
+
+/* 点击结果：关层 → 确保消息已渲染（分页窗口不够就先扩大）→ 平滑滚动居中 → 高亮 2 秒 */
+function jumpToChatMessage(roleId, mid) {
+  closeChatSearch();
+  const msgs = chatOf(roleId);
+  const idx = msgs.findIndex(m => m.id === mid);
+  if (idx < 0) return;
+  const startIdx = Math.max(0, msgs.length - chatRenderLimit);
+  if (idx < startIdx) {
+    /* 目标消息在当前渲染窗口之前：一次扩窗到能覆盖它（等同连点多次「查看更早的消息」） */
+    chatRenderLimit = msgs.length - idx;
+    renderChatMessages();
+  }
+  const el = $('#chatList .msg[data-mid="' + mid + '"]');
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.add('highlight-msg');
+  setTimeout(() => el.classList.remove('highlight-msg'), 2000);
 }
 
 function bindBubbleLongPress(list) {
@@ -5716,12 +5851,15 @@ function musicEnsureAudio() {
   musicAudio.addEventListener('loadedmetadata', musicSyncProgress);
   musicAudio.addEventListener('timeupdate', () => { if (!musicSeeking) musicSyncProgress(); });
   musicAudio.addEventListener('error', () => {
-    if (musicTrack()) showToast('音频加载失败，请重新上传这首歌');
+    const t = musicTrack();
+    if (!t) return;
+    /* 网络直链与本地上传给出不同的排障提示 */
+    showToast(t.isUrl ? '音频加载失败，请检查链接是否有效或格式是否支持。' : '音频加载失败，请重新上传这首歌');
   });
   return musicAudio;
 }
 
-/* 首次进入时把持久化的歌单元数据还原成运行时列表（不含音频，Blob 无法跨刷新） */
+/* 首次进入时把持久化的歌单元数据还原成运行时列表（本地音频 Blob 无法跨刷新；网络直链原样恢复） */
 function musicTracksInit() {
   const list = (state.music && Array.isArray(state.music.list)) ? state.music.list : [];
   musicTracks = list.map(t => ({
@@ -5731,20 +5869,24 @@ function musicTracksInit() {
     lrc: t.lrc || '',
     lyrics: parseLRC(t.lrc || ''),
     cover: t.cover || '',
-    url: '',
+    isUrl: t.isUrl === true,
+    /* 网络歌曲：url 是纯文本，刷新后直接可播；本地上传：Blob 已失效，留空待重新上传 */
+    url: t.isUrl ? (t.url || '') : '',
     size: 0
   }));
   musicIndex = musicTracks.length ? 0 : -1;
 }
 
-/* 只把歌名与歌词同步回 state（音频 Blob URL 绝不写入） */
+/* 只把歌名与歌词同步回 state；本地音频 Blob URL 绝不写入，网络直链（isUrl）作为纯文本持久化 */
 function musicPersistList() {
   state.music.list = musicTracks.map(t => ({
     id: t.id,
     name: t.name,
     displayName: t.displayName || '',
     lrc: (t.lrc || '').slice(0, 12000),
-    cover: t.cover || ''
+    cover: t.cover || '',
+    isUrl: t.isUrl === true,
+    url: t.isUrl ? (t.url || '') : ''
   }));
   persist();
 }
@@ -6007,6 +6149,64 @@ async function musicAddFiles(files) {
   if (list.length) showToast(`已添加 ${list.length} 首歌`);
 }
 
+/* ---------- 粘贴链接听歌：网络直链作为纯文本持久化，刷新后仍可播放 ---------- */
+function openMusicLinkDialog() {
+  const modal = showModal({
+    title: '粘贴链接',
+    body: `
+      <input class="ls-link-input" id="musicLinkName" maxlength="40" placeholder="歌曲名称（选填，留空自动取文件名）">
+      <input class="ls-link-input" id="musicLinkUrl" type="url" placeholder="请粘贴音频链接">
+      <div class="ls-link-hint">支持格式：mp3, m4a, wav, ogg 等音频直链</div>
+      <button class="loc-send" id="musicLinkOk" type="button">确定添加</button>`
+  });
+  const root = modal.el;
+  $('#musicLinkOk', root).addEventListener('click', () => {
+    const url = String(($('#musicLinkUrl', root) || {}).value || '').trim();
+    if (!url || !/^https?:\/\//i.test(url)) {
+      showToast('请粘贴以 http 开头的有效音频链接');
+      return;
+    }
+    let name = String(($('#musicLinkName', root) || {}).value || '').trim();
+    if (!name) {
+      /* 未填名称：截取链接中的文件名并去扩展名 */
+      try {
+        const seg = (new URL(url).pathname.split('/').pop() || '').split('?')[0];
+        name = decodeURIComponent(seg).replace(/\.(mp3|m4a|aac|wav|ogg|flac|webm|opus)$/i, '').trim();
+      } catch (e) { name = ''; }
+      if (!name) name = '网络歌曲';
+    }
+    const track = {
+      id: uid(),
+      name,
+      displayName: '',
+      lrc: '',
+      lyrics: [],
+      cover: '',
+      isUrl: true,     /* 网络直链：切歌 / 删除时绝不 revokeObjectURL，且随歌单持久化 */
+      url,
+      size: 0
+    };
+    musicTracks.push(track);
+    musicPersistList();          /* 纯文本链接写入本地存储，刷新后仍在 */
+    if (musicIndex < 0 || !musicTrack() || !musicTrack().url) {
+      /* 只装载不自动播放（play 必须由用户点击触发） */
+      musicIndex = musicTracks.length - 1;
+      const audio = musicEnsureAudio();
+      audio.src = track.url;
+      audio.dataset.musicId = track.id;
+      audio.currentTime = 0;
+      state.music.name = track.name;
+      persist();
+    }
+    musicSyncAll();
+    renderListenPageIfOpen();
+    renderHomeIfOpen();
+    renderMusicSheetList();
+    modal.close();
+    showToast('已添加《' + name + '》');
+  });
+}
+
 /* 同名 .lrc 自动配对：先按文件名匹配，匹配不到则挂到本次新增的第一首 */
 async function musicAttachLrcFiles(files, addedTracks) {
   let count = 0;
@@ -6071,7 +6271,8 @@ function musicRemoveTrack(id) {
     try { audio.load(); } catch (e) { /* 忽略 */ }
     musicIndex = -1;
   }
-  if (track.url) {
+  if (track.url && !track.isUrl) {
+    /* 网络直链不是 Blob URL，revoke 会报错，必须跳过 */
     try { URL.revokeObjectURL(track.url); } catch (e) { /* 忽略 */ }
     musicUrls.delete(track.url);
   }
@@ -6132,10 +6333,13 @@ function openMusicPlaylist() {
       <div class="ls-sheet-grab" id="musicSheetClose" role="button" aria-label="关闭播放列表"></div>
       <div class="ls-sheet-head">
         <b>播放列表</b>
-        <button class="ls-sheet-add" id="musicSheetAdd" type="button" aria-label="添加歌曲">＋</button>
+        <div class="ls-sheet-actions">
+          <button class="ls-sheet-linkbtn" id="musicSheetLink" type="button">粘贴链接</button>
+          <button class="ls-sheet-add" id="musicSheetAdd" type="button" aria-label="添加歌曲">＋</button>
+        </div>
       </div>
       <div class="ls-sheet-list" id="musicSheetList"></div>
-      <div class="ls-sheet-tip">音频只在本次打开期间有效，刷新后需重新上传；不会写入本地存储。</div>
+      <div class="ls-sheet-tip">本地上传的音频只在本次打开期间有效；粘贴的网络链接歌曲会一直保存，刷新后可直接播放。</div>
     </div>`;
   host.appendChild(mask);
   musicSheetOpenedAt = Date.now();
@@ -6145,6 +6349,10 @@ function openMusicPlaylist() {
   $('#musicSheetAdd', mask).addEventListener('click', e => {
     e.stopPropagation();
     openMusicFilePicker();
+  });
+  $('#musicSheetLink', mask).addEventListener('click', e => {
+    e.stopPropagation();
+    openMusicLinkDialog();
   });
   $('#musicSheetClose', mask).addEventListener('click', e => {
     e.stopPropagation();
@@ -7178,10 +7386,10 @@ function csInjector() {
 
 /* 预览用的独立 style：只作用于 .cs-preview，绝不污染真实聊天 */
 function csPreviewStyle() {
-  let el = document.getElementById('custom-style-preview');
+  let el = document.getElementById('preview-style-injector');
   if (!el) {
     el = document.createElement('style');
-    el.id = 'custom-style-preview';
+    el.id = 'preview-style-injector';
     document.head.appendChild(el);
   }
   return el;
@@ -7590,22 +7798,26 @@ function csScopeCSS(css, prefix) {
 /* 超大样式（Base64 字体草稿可达几十 MB）判定阈值：超过则构建 / 注入一律异步 */
 const CS_BIG_CSS_LEN = 1024 * 1024;
 
-/* 实时预览：解析当前分类的草稿并注入预览作用域（预览不套 #app 前缀，否则永远不命中）。
+/* 统一预览：不再区分字体/气泡两套预览——无论当前选中哪个分类，
+ * 都把【字体草稿 + 气泡草稿】合并解析后注入预览专属的 <style id="preview-style-injector">，
+ * 作用域锁定 .cs-preview（统一聊天预览框），绝不污染真实聊天。
  * 超大字体草稿走 setTimeout 异步注入，避免几十 MB 的 style 写入阻塞主线程造成假死；
  * 异步分支在执行时重新读取草稿，清空操作不会被旧内容覆盖 */
+function csPreviewCombined() {
+  const fontCss = csBuildCSS(csDraft.font || '', 'font');
+  const bubbleCss = csBuildCSS(csDraft.bubble || '', 'bubble');
+  const css = [fontCss, bubbleCss].filter(Boolean).join('\n\n');
+  csPreviewStyle().textContent = css ? csScopeCSS(css, '.cs-preview') : '';
+}
 function csUpdatePreview() {
-  const draft = csDraft[csTab] || '';
-  if (draft.length > CS_BIG_CSS_LEN) {
+  const total = (csDraft.font || '').length + (csDraft.bubble || '').length;
+  if (total > CS_BIG_CSS_LEN) {
     setTimeout(() => {
-      try {
-        const css = csBuildCSS(csDraft[csTab] || '', csTab);
-        csPreviewStyle().textContent = css ? csScopeCSS(css, '.cs-preview') : '';
-      } catch (e) { /* 超大文本注入失败不影响页面其它功能 */ }
+      try { csPreviewCombined(); } catch (e) { /* 超大文本注入失败不影响页面其它功能 */ }
     }, 0);
     return;
   }
-  const css = csBuildCSS(draft, csTab);
-  csPreviewStyle().textContent = css ? csScopeCSS(css, '.cs-preview') : '';
+  csPreviewCombined();
 }
 
 /* 全局注入：超大字体样式延迟到下一轮事件循环，防止点击「应用」时页面卡住 */
@@ -7888,16 +8100,15 @@ function customStylePanelHTML() {
       <!-- 代码输入区 -->
       <textarea class="cs-input" id="csInput" spellcheck="false" placeholder="请粘贴 CSS 代码、在线字体链接或 CSS 文件链接">${esc(csDraft[csTab] || '')}</textarea>
       <div class="muted" style="font-size:12px;margin:6px 0 0;line-height:1.6">样式只在聊天页内生效（自动锁定 #page-chat 作用域），绝不会污染 Toast、来电弹窗等系统界面。纯属性（如 background: pink;）会自动包裹气泡/文字选择器并强制加 !important；含花括号的代码原样注入。贴字体直链（.ttf / .woff / .woff2）自动生成 @font-face，贴 .css 链接自动生成 @import。若应用成功但界面没变化，请检查类名是否命中 .msg.mine / .msg.theirs > .msg-body > .bubble（可在控制台检查）。</div>
-      <!-- 共用预览区：DOM 与聊天页完全一致（.msg.theirs / .msg.mine > .msg-body > .bubble），
-           这样预览里生效的代码，在真实聊天页必然也生效 -->
-      <div class="cs-preview" id="csPreview">
+      <!-- 统一预览区：DOM 与真实聊天页完全一致（.msg.theirs / .msg.mine > .msg-body > .bubble），
+           字体与气泡代码合并注入，预览里生效的代码在真实聊天页必然也生效 -->
+      <div id="style-preview-container" class="cs-preview style-preview-container">
         <div class="msg theirs">
-          <div class="msg-body"><div class="bubble">今晚的风很轻，我把今天的心事折成纸船，放进你的梦里。</div></div>
+          <div class="msg-body"><div class="bubble">这是对方发出的气泡，你可以看到字体和气泡的搭配效果。</div></div>
         </div>
         <div class="msg mine">
-          <div class="msg-body"><div class="bubble">那我在岸边等你，记得带上我最喜欢的那颗星。</div></div>
+          <div class="msg-body"><div class="bubble">这是我发出的气泡，看，效果一目了然！</div></div>
         </div>
-        <div class="cs-test-text chat-text">字体预览 · AaBb 0123 · 梦之信使</div>
       </div>
       <!-- 操作按钮区：应用到全局 / 识别并应用（主色）+ 状态标签 -->
       <div class="btn-row cs-apply-row">

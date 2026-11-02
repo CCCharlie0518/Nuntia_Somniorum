@@ -2804,6 +2804,23 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
   touch-action:manipulation;
 }
 .ls-sheet-add:active{background:rgba(var(--primary-rgb),.18);}
+/* 播放列表头部右侧操作组：粘贴链接（文字钮）+ ＋（本地导入） */
+.ls-sheet-actions{display:flex;align-items:center;gap:10px;}
+.ls-sheet-linkbtn{
+  padding:7px 12px;border-radius:999px;
+  font-size:12.5px;color:var(--primary);
+  background:rgba(var(--primary-rgb),.10);
+  touch-action:manipulation;
+}
+.ls-sheet-linkbtn:active{background:rgba(var(--primary-rgb),.18);}
+/* 粘贴链接弹窗：输入框与格式提示 */
+.ls-link-input{
+  width:100%;box-sizing:border-box;border:0;
+  background:#f7f8fa;border-radius:12px;
+  padding:11px 12px;font-size:14px;margin-bottom:10px;
+}
+.ls-link-input::placeholder{color:#a8adb7;}
+.ls-link-hint{font-size:12px;color:#999;margin:-4px 0 4px;line-height:1.6;}
 .ls-sheet-list{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 .ls-sheet-empty{padding:22px 8px;text-align:center;font-size:12.5px;color:var(--sub);line-height:1.7;}
 .ls-song{
@@ -3249,15 +3266,17 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
 
 /* 共用预览区：DOM 与聊天页完全一致（.msg.theirs / .msg.mine > .msg-body > .bubble），
    气泡底色/文字色直接沿用 style.css 里聊天页的真实规则，保证预览与真实聊天 100% 一致 */
-.cs-preview{
+.cs-preview, .style-preview-container{
   display:flex;flex-direction:column;gap:10px;margin:10px 0 12px;padding:12px;
-  border-radius:14px;background:#fff;border:.5px solid rgba(60,60,67,.10);overflow:hidden;
+  border-radius:14px;overflow:hidden;
+  /* 浅灰底让气泡凸显（与真实聊天页默认底色一致） */
+  background:var(--bg);
+  border:.5px solid rgba(60,60,67,.10);
 }
 .cs-preview .bubble{max-width:78%;width:fit-content;}
-.cs-test-text{
-  font-size:14px;color:#1C1C1E;text-align:center;padding:8px 0 2px;
-  border-top:1px dashed #E5E5EA;word-break:break-all;
-}
+/* 预览区内保持真实聊天的左右对齐：对方居左、我方居右 */
+.style-preview-container .msg.mine{justify-content:flex-end;}
+.style-preview-container .msg.mine .msg-body{align-items:flex-end;}
 
 /* 预设列表 */
 .cs-preset-list{display:flex;flex-direction:column;gap:8px;}
@@ -3528,17 +3547,114 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
   overflow:hidden;box-shadow:0 3px 10px rgba(var(--primary-rgb),.22);
   text-align:left;
 }
-.loc-head{
-  display:flex;align-items:center;gap:6px;
+.loc-header{
   font-size:16px;font-weight:700;color:#fff !important;line-height:1.2;
+  letter-spacing:.5px;
 }
-.loc-head .loc-pin{font-size:17px;line-height:1;}
 /* 分割线：半透明白，在深色背景上呈现最干净的层次 */
 .loc-divider{width:100%;height:1px;background:rgba(255,255,255,.4) !important;margin:4px 0 !important;flex-shrink:0;}
-.loc-place{
-  display:flex;align-items:flex-start;gap:6px;
-  font-size:13px;color:#fff !important;line-height:1.4;
-  word-break:break-all;
+/* 地图底纹区域：相对定位，高 80px，网格若隐若现 */
+.loc-map-area{position:relative;height:80px;border-radius:8px;overflow:hidden;}
+.loc-map-bg{
+  position:absolute;top:0;left:0;right:0;bottom:0;
+  background-image:
+    linear-gradient(rgba(255,255,255,.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.1) 1px, transparent 1px);
+  background-size:15px 15px;
+  border-radius:8px;
+  z-index:1;
 }
-.loc-place-emoji{flex-shrink:0;font-size:14px;line-height:1.4;}
-.loc-place-name{flex:1;min-width:0;color:#fff !important;}
+/* 红色图钉：地图正中央偏上，带投影的立体感，无动画 */
+.loc-pin{
+  position:absolute;left:50%;top:38%;
+  transform:translate(-50%,-50%);
+  font-size:28px;line-height:1;
+  filter:drop-shadow(0 4px 2px rgba(0,0,0,.2));
+  z-index:2;
+}
+/* 地点名称：钉在地图底部，半透明黑底胶囊保证清晰 */
+.loc-name{
+  position:absolute;left:50%;bottom:6px;
+  transform:translateX(-50%);
+  max-width:92%;box-sizing:border-box;
+  background:rgba(0,0,0,.2);padding:2px 8px;border-radius:10px;
+  font-size:13px;line-height:1.4;color:#fff !important;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  z-index:3;
+}
+
+/* ===================== 聊天页「搜索聊天记录」 =====================
+   遮罩层挂在 .chat-page 内（其自身 fixed/absolute，即包含块）：
+   层级 12000 高于聊天顶栏/输入框(10000)，完全覆盖聊天内容 */
+.chat-search-layer{
+  position:absolute;top:0;left:0;right:0;bottom:0;z-index:12000;
+  display:flex;flex-direction:column;
+  background:rgba(247,248,250,.96);
+  -webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);
+  /* 默认隐藏：整层上滑出视口 + 不可见（动画结束后再切 visibility，滑出过程不闪断） */
+  transform:translateY(-102%);
+  visibility:hidden;
+  transition:transform .3s cubic-bezier(.22,.8,.32,1), visibility 0s linear .3s;
+}
+.chat-search-layer.open{
+  transform:translateY(0);
+  visibility:visible;
+  transition:transform .3s cubic-bezier(.22,.8,.32,1);
+}
+/* 顶部搜索条：与原顶栏等高对齐（同样让出刘海安全区），纯白底盖严原顶栏 */
+.csch-bar{
+  flex:0 0 auto;display:flex;align-items:center;gap:8px;
+  padding:calc(10px + env(safe-area-inset-top, 0px)) 12px 10px;
+  background:#fff;border-bottom:.5px solid var(--line);
+}
+.csch-input-wrap{
+  flex:1;min-width:0;display:flex;align-items:center;gap:6px;
+  background:#f0f1f4;border-radius:18px;padding:7px 12px;
+}
+.csch-input-wrap svg{width:15px;height:15px;flex:0 0 auto;color:#8E8E93;}
+.csch-input-wrap input{
+  flex:1;min-width:0;border:0;background:transparent;outline:none;
+  font-size:15px;color:#111;
+  -webkit-appearance:none;appearance:none;
+}
+.csch-input-wrap input::placeholder{color:#a8adb7;}
+.csch-cancel{
+  flex:0 0 auto;padding:6px 4px;font-size:15px;color:var(--primary);
+  -webkit-tap-highlight-color:transparent;
+}
+.csch-cancel:active{opacity:.6;}
+/* 结果列表：自带滚动，结果再多也不顶开搜索条 */
+.csch-results{
+  flex:1 1 auto;min-height:0;overflow-y:auto;
+  -webkit-overflow-scrolling:touch;
+  padding:8px 0 24px;
+}
+.csch-item{
+  padding:11px 16px;border-bottom:.5px solid var(--line);
+  cursor:pointer;
+}
+.csch-item:active{background:rgba(0,0,0,.05);}
+.csch-item-text{
+  font-size:14px;line-height:1.45;color:#111;word-break:break-all;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+}
+.csch-item-text mark{
+  background:rgba(255,204,0,.55);color:inherit;border-radius:2px;padding:0 1px;
+}
+.csch-item-time{font-size:11px;color:#8E8E93;margin-top:4px;}
+.csch-empty{padding:64px 20px;text-align:center;font-size:13px;color:#8E8E93;}
+
+/* 跳转高亮：气泡外圈暖色光环连闪两次后消退（配合 JS 2 秒后移除类名） */
+@keyframes highlightMsgGlow{
+  0%,100%{box-shadow:0 0 0 0 rgba(255,196,0,0);}
+  30%{box-shadow:0 0 0 4px rgba(255,196,0,.75);}
+  60%{box-shadow:0 0 14px 4px rgba(255,196,0,.45);}
+}
+.highlight-msg .bubble{
+  animation:highlightMsgGlow .8s ease-in-out 2 !important;
+}
+/* 拍一拍 / 系统行没有气泡结构：退而高亮整条消息的底色 */
+.highlight-msg .pat-msg{
+  animation:highlightMsgGlow .8s ease-in-out 2;
+  border-radius:8px;
+}
