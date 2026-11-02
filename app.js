@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.1.0';
+const APP_VERSION = 'v8.1.1';
 
 /* =========================================================
  * 一、基础工具函数
@@ -630,7 +630,7 @@ function defaultState() {
       notifyEnabled: false,
       notifyChat: true,
       notifySpace: true,
-      patChance: 80,
+      patChance: 30,
       patCooldown: 10,
       /* 一起读书：接受共读概率 / 陪读消息间隔（0 表示关闭）/ TA 主动邀请共读概率 */
       readTogetherAcceptChance: 80,
@@ -1034,9 +1034,9 @@ function mergeState(saved) {
   const pMax = Number(out.settings.proactiveMax);
   out.settings.proactiveMax = Number.isFinite(pMax) ? clamp(Math.round(pMax), 1, 240) : 30;
   if (out.settings.proactiveMax < out.settings.proactiveMin) out.settings.proactiveMax = out.settings.proactiveMin;
-  /* 拍一拍：概率 0~100 默认 80；冷却 0~120 秒默认 10 */
+  /* 拍一拍：概率 0~100，仅当本地缺失/非法时才回落到默认 30（老用户已存的值原样保留）；冷却 0~120 秒默认 10 */
   const patCh = Number(out.settings.patChance);
-  out.settings.patChance = Number.isFinite(patCh) ? clamp(Math.round(patCh), 0, 100) : 80;
+  out.settings.patChance = Number.isFinite(patCh) ? clamp(Math.round(patCh), 0, 100) : 30;
   const patCd = Number(out.settings.patCooldown);
   out.settings.patCooldown = Number.isFinite(patCd) ? clamp(Math.round(patCd), 0, 120) : 10;
   /* TA主动发空间：开关默认开启；概率 0~100 默认 15；间隔 1~480 分钟默认 30~90 */
@@ -1901,6 +1901,11 @@ function switchTab(tab) {
 
 function applyRoute() {
   const page = currentRoute.page;
+  /* 离开互动词云时停掉所有延迟任务与 wordcloud2 内部动画帧，避免在其它页面继续掉帧 */
+  if (typeof wcCleanup === 'function'
+    && !(currentRoute.page === 'sub' && currentRoute.name === 'wordcloud')) {
+    wcCleanup();
+  }
   /* 一起读书：离开阅读界面时先卸载悬浮窗并停止陪读定时器（只清理本模块 DOM，不影响其它页面） */
   if (readingRoomMounted && !(currentRoute.page === 'sub' && currentRoute.name === 'readingroom')) {
     rdUnmountRoom();
@@ -3682,7 +3687,7 @@ function checkTaPat() {
   if (now < state.patNextAt) return;
   state.patNextAt = now + Math.max(cd, 5) * 1000;
   persist();
-  const chance = Number(state.settings.patChance ?? 80);
+  const chance = Number(state.settings.patChance ?? 30);
   if (chance <= 0) return;
   if (callState.status !== 'idle') return;  /* 通话中不拍 */
   if (Math.random() * 100 >= chance) return;
@@ -9916,6 +9921,8 @@ let wcTimeTab = 'week';   /* today 今日 / week 本周 / all 全部，默认本
 let wcWhoTab = 'ta';      /* ta TA说的 / me 我说的，默认 TA 说的 */
 let wcRoleId = null;      /* 进入词云页时锁定的梦角 id，切换筛选时保持不变 */
 let wcRenderSeq = 0;      /* 渲染序号：快速切换筛选时，旧的延迟渲染任务自动作废，避免重复叠画卡死 */
+let wcTimer = null;       /* 统计 / 绘制的延迟任务句柄，离开页面时必须清掉 */
+let wcLastKey = '';       /* 已成功绘制过的数据指纹（角色+筛选），相同则绝不再排版 */
 
 /* ===== 词云分词（最简方案）：全程只用 split + forEach，没有任何 while 循环，结构上不可能死循环 ===== */
 /* 分割线：空白 + 全部中英文标点 + 常见特殊符号，作为最高优先级的切分依据 */
@@ -10222,6 +10229,38 @@ function wcShowLoading() {
   if (rankEl) { rankEl.classList.add('hidden'); rankEl.innerHTML = ''; }
 }
 
+/* 取消所有待执行的词云任务：切换筛选 / 离开页面时调用，
+ * 保证不会留下任何延迟任务在后台抢主线程 */
+function wcCancelPending() {
+  if (wcTimer) { clearTimeout(wcTimer); wcTimer = null; }
+  wcRenderSeq++;   /* 让其它分支里已排队但未登记的回调全部作废 */
+}
+
+/* 唯一的重绘入口：先作废旧任务，再延迟执行一次；delay 期间用户继续点击会被后一次覆盖 */
+function wcScheduleDraw(delay) {
+  wcCancelPending();
+  const seq = wcRenderSeq;
+  wcTimer = setTimeout(() => {
+    wcTimer = null;
+    if (seq !== wcRenderSeq) return;   /* 期间又切了筛选，本次任务作废 */
+    drawWordCloud();
+  }, delay || 0);
+}
+
+/* 离开词云页：清定时器、停掉 wordcloud2 的内部动画帧、清空画布、重置指纹。
+ * 不清理的话，库的 requestAnimationFrame 会在页面已卸载后继续跑，持续掉帧。 */
+function wcCleanup() {
+  wcCancelPending();
+  wcLastKey = '';
+  if (typeof WordCloud === 'function' && typeof WordCloud.stop === 'function') {
+    try { WordCloud.stop(); } catch (err) { /* 库未加载时忽略 */ }
+  }
+  const canvas = document.getElementById('wordcloud-canvas');
+  if (canvas) {
+    try { canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height); } catch (err) { /* 忽略 */ }
+  }
+}
+
 /* 词云页：返回键 + 标题 + 双筛选标签 + canvas 容器 */
 function renderWordCloudPage() {
   /* 每次从快捷菜单进入都恢复默认筛选：本周 + TA说的 */
@@ -10231,6 +10270,7 @@ function renderWordCloudPage() {
      兜底才用当前会话角色，避免多梦角时统计到别人的聊天记录 */
   const back = routeStack.length ? routeStack[routeStack.length - 1] : null;
   wcRoleId = (back && back.roleId) || state.activeRoleId;
+  wcLastKey = '';   /* 每次进入都允许重绘一次；此后滚动 / 缩放绝不会再触发排版 */
   const roleId = wcRoleId;
   const dn = taName(roleId);
   const body = subShell('互动词云', `
@@ -10257,24 +10297,31 @@ function renderWordCloudPage() {
     $$('[data-wctime]', body).forEach(b => b.classList.toggle('active', b === btn));
     /* 再清空旧图并显示「正在统计…」，把重算与重绘推迟到下一个任务，避免阻塞点击 */
     wcShowLoading();
-    setTimeout(() => drawWordCloud(), 50);
+    wcScheduleDraw(60);
   }));
   $$('[data-wcwho]', body).forEach(btn => btn.addEventListener('click', () => {
     if (wcWhoTab === btn.dataset.wcwho) return;
     wcWhoTab = btn.dataset.wcwho;
     $$('[data-wcwho]', body).forEach(b => b.classList.toggle('active', b === btn));
     wcShowLoading();
-    setTimeout(() => drawWordCloud(), 50);
+    wcScheduleDraw(60);
   }));
-  /* 等布局稳定后再量 canvas 实际宽度，避免 backing store 拉伸模糊 */
-  requestAnimationFrame(() => drawWordCloud());
+  /* 等布局稳定后再量 canvas 实际宽度，避免 backing store 拉伸模糊。
+     这是唯一一次首屏绘制；滚动、resize 都不再挂任何重绘逻辑 */
+  requestAnimationFrame(() => wcScheduleDraw(0));
 }
 
-/* 取数 → 统计 → 调用 wordcloud2.js 绘制 */
+/* 取数 → 统计 → 调用 wordcloud2.js 绘制。
+ * 全模块只有这一个排版入口，并且带「角色 + 筛选」指纹去重：
+ * 同一筛选成功画过之后直接返回，滚动 / resize 永远不会再触发重新计算。 */
 function drawWordCloud() {
   const canvas = $('#wordcloud-canvas');
-  if (!canvas) return;
-  const seq = ++wcRenderSeq;   /* 每次调用递增，100ms 延迟任务据此判断是否已过期 */
+  if (!canvas || !canvas.isConnected) return;
+
+  /* ⓪ 指纹去重：已画过同一份数据就立即返回，绝不重复排版 */
+  const key = (wcRoleId || state.activeRoleId || '') + '|' + wcTimeTab + '|' + wcWhoTab;
+  if (key === wcLastKey) return;
+
   const emptyEl = $('#wcEmpty');
   const dn = taName(wcRoleId || state.activeRoleId);
   const rankEl = $('#wcRank');
@@ -10299,8 +10346,6 @@ function drawWordCloud() {
   /* ② 取数 + 全量词频统计 → 严格清洗成 [['词语', 频次], ...] 完整列表（此阶段不截断） */
   const texts = wcCollectTexts(wcRoleId || state.activeRoleId, wcTimeTab, wcWhoTab);
   const fullList = wcSanitizeList(wcBuildList(texts));
-  /* 排查日志：确认统计阶段产出了多少词条，再对比最终只渲染 Top 10 */
-  console.log("【词云排查】分词后词条总数:", fullList.length, "｜渲染数量:", Math.min(fullList.length, WC_TOP_N));
   if (!fullList.length) {
     const scope = wcTimeTab === 'all' ? '全部聊天记录' : '这段时间';
     showEmpty(texts.length
@@ -10320,8 +10365,8 @@ function drawWordCloud() {
     return;
   }
 
-  /* ⑤ 动态字号区间：取 Top 10 里的最大 / 最小频次，把频次线性映射到 16px ~ 55px，
-   * 让最高频的词尽量撑满画布，最低频的词也保持可读（数据已按频次降序，首位即最大值） */
+  /* ⑤ 动态字号区间：取 Top 10 里的最大 / 最小频次，映射到 15px ~ 40px。
+   * 上限压到 40px：字太大时碰撞网格要反复回退重排，是排版算法变慢的主因。 */
   const maxCount = list[0][1];
   const minCount = list[list.length - 1][1];
 
@@ -10337,48 +10382,47 @@ function drawWordCloud() {
     rankEl.classList.remove('hidden');
   }
 
-  /* ⑥ 延迟 200ms 再画：等 DOM 完全渲染、父容器尺寸稳定后，再强制写入真实像素尺寸 */
-  setTimeout(() => {
-    /* 过期任务直接作废；canvas 不在文档中（已返回/切页）也放弃本次渲染 */
-    if (seq !== wcRenderSeq || !canvas.isConnected) return;
-    try {
-      /* 强制绝对像素：直接量父容器真实宽度（兜底 300），高度固定 350，
-       * 避免移动端按 CSS 百分比自动缩放，把整块词云压成一团 */
-      const parentWidth = Math.round(canvas.parentElement.getBoundingClientRect().width) || 300;
-      canvas.width = Math.max(200, parentWidth);
-      canvas.height = 350;
-      /* 重设 width/height 会清空画布，这里再显式清一次，确保上一次绘制不残留叠加 */
-      try { canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height); } catch (clearErr) { /* 忽略 */ }
+  /* ⑥ 限制绘制精度：backing store 固定为 CSS 像素（1x），不跟随高 DPR 手机放大。
+   * wordcloud2 直接用 canvas.width/height 作为碰撞网格坐标系，尺寸翻倍会让排版耗时成倍增长；
+   * 同时重设 width/height 本身就会清空画布，再显式 clearRect 一次，杜绝旧图叠新图。 */
+  const cssW = Math.round(canvas.getBoundingClientRect().width) || 300;
+  const cssH = Math.round(canvas.getBoundingClientRect().height) || 350;
+  canvas.width = Math.max(200, cssW);
+  canvas.height = Math.max(200, cssH);
+  try { canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height); } catch (clearErr) { /* 忽略 */ }
 
-      WordCloud(canvas, {
-        list,
-        gridSize: 10,        /* 网格从 16 缩小到 10：排布更紧凑，更容易填满画布空隙 */
-        weightFactor: function (count) {
-          /* 频次全相同就没有区间可言，统一给中间大字号 */
-          if (maxCount === minCount) return 40;
-          /* 线性映射：最低频 16px，最高频约 55px，让 Top 词明显放大、撑满画布 */
-          const size = 16 + ((count - minCount) / (maxCount - minCount)) * 39;
-          return Math.min(55, Math.max(16, size));   /* 再夹一次，防极端数据越界 */
-        },
-        fontFamily: 'sans-serif',
-        fontWeight: 600,
-        color: function () {
-          /* 主题蓝 + 低饱和糖果色随机 */
-          const colors = ['#007AFF', '#FF6B81', '#A29BFE', '#55E6C1', '#FDCB6E'];
-          return colors[Math.floor(Math.random() * colors.length)];
-        },
-        backgroundColor: 'transparent',
-        rotateRatio: 0.3,       /* 少量词允许旋转，排版更活泼 */
-        shuffle: false,         /* 高频词优先落在中心 */
-        drawOutOfBound: false,
-        shrinkToFit: true
-      });
-    } catch (err) {
-      /* 库内部异常只打印并提示，绝不向上抛，避免整页卡死 */
-      console.error('[互动词云] 渲染失败：', err);
-      showEmpty('词云渲染出错了，换个筛选条件再试试');
-    }
-  }, 200);   /* 至少 200ms，确保移动端 DOM 与容器尺寸都已稳定 */
+  try {
+    WordCloud(canvas, {
+      list,
+      gridSize: 18,            /* 网格从 10 放大到 18：碰撞检测格子更少，排版明显更快 */
+      weightFactor: function (count) {
+        /* 频次全相同就没有区间可言，统一给中间大字号 */
+        if (maxCount === minCount) return 30;
+        /* 线性映射：最低频 15px，最高频 40px（硬上限，防大字拖慢排版） */
+        const size = 15 + ((count - minCount) / (maxCount - minCount)) * 25;
+        return Math.min(40, Math.max(15, size));
+      },
+      fontFamily: 'sans-serif',
+      fontWeight: 600,
+      color: function () {
+        /* 主题蓝 + 低饱和糖果色随机 */
+        const colors = ['#007AFF', '#FF6B81', '#A29BFE', '#55E6C1', '#FDCB6E'];
+        return colors[Math.floor(Math.random() * colors.length)];
+      },
+      backgroundColor: 'transparent',
+      clearCanvas: true,       /* 每次绘制前由库自己清空画布 */
+      rotateRatio: 0.3,        /* 少量词允许旋转，排版更活泼 */
+      shuffle: false,          /* 高频词优先落在中心 */
+      drawOutOfBound: false,
+      shrinkToFit: true
+    });
+    wcLastKey = key;   /* 只有真正画成功才记指纹，失败后允许重试 */
+  } catch (err) {
+    /* 库内部异常只打印并提示，绝不向上抛，避免整页卡死 */
+    wcLastKey = '';
+    console.error('[互动词云] 渲染失败：', err);
+    showEmpty('词云渲染出错了，换个筛选条件再试试');
+  }
 }
 
 /* =========================================================
@@ -11070,16 +11114,18 @@ function renderPatLibBox() {
     const c = patLib(patTab).find(x => x.id === btn.dataset.patEdit);
     if (c) openPatEditModal(c);
   }));
-  $$('[data-pat-del]', box).forEach(btn => btn.addEventListener('click', () => {
+  $$('[data-pat-del]', box).forEach(btn => btn.addEventListener('click', async () => {
     const libArr = patLib(patTab);
     const idx = libArr.findIndex(x => x.id === btn.dataset.patDel);
     if (idx < 0) return;
-    confirmDialog('删除字卡', '确定删除这条拍一拍字卡吗？', () => {
-      libArr.splice(idx, 1);
-      persist();
-      renderPatLibBox();
-      showToast('已删除');
-    });
+    /* confirmDialog(标题, 正文, 确认按钮文案, 危险样式) 返回 Promise<boolean>：
+       删除逻辑必须放在 await 之后执行，绝不能作为第 3 个参数（那是按钮文字）传入 */
+    const ok = await confirmDialog('删除字卡', '确定删除这条拍一拍字卡吗？', '删除', true);
+    if (!ok) return;
+    libArr.splice(idx, 1);
+    persist();
+    renderPatLibBox();
+    showToast('已删除');
   }));
 }
 
@@ -14402,11 +14448,70 @@ async function clearAllData() {
 /* =========================================================
  * 二十二、概率与行为设置
  * ========================================================= */
+/* 概率与行为页：分类导航数据（顺序与页面区块一一对应） */
+const PROB_SECTIONS = [
+  { name: '字卡回复', id: 'section-reply' },
+  { name: '聊天互动', id: 'section-chat' },
+  { name: '语音来电', id: 'section-call' },
+  { name: '转账礼物', id: 'section-transfer' },
+  { name: '梦角定位', id: 'section-location' },
+  { name: '留影时刻', id: 'section-moment' },
+  { name: '主动回复', id: 'section-proactive' },
+  { name: '一起专注', id: 'section-focus' },
+  { name: '空间互动', id: 'section-space' },
+  { name: 'TA发空间', id: 'section-ta-space' },
+  { name: '拍一拍', id: 'section-pat' },
+  { name: '一起读书', id: 'section-read' }
+];
+
+/* 渲染分类导航并绑定点击 / 滚动联动：
+ * 点击 → 高亮当前按钮 + 平滑滚动到对应区块（scroll-margin-top 抵消吸顶遮挡）；
+ * 滚动 → 按区块位置自动切换高亮，避免手动滚动后高亮与实际位置脱节。 */
+function renderSettingsNav() {
+  const nav = $('#settingsNav');
+  if (!nav) return;
+  nav.innerHTML = PROB_SECTIONS.map((s, i) =>
+    `<button class="settings-nav-btn${i === 0 ? ' active' : ''}" data-nav="${s.id}">${esc(s.name)}</button>`
+  ).join('');
+
+  const setActive = id => {
+    $$('.settings-nav-btn', nav).forEach(b => b.classList.toggle('active', b.dataset.nav === id));
+  };
+
+  nav.addEventListener('click', e => {
+    const btn = e.target.closest('[data-nav]');
+    if (!btn) return;
+    const id = btn.dataset.nav;
+    setActive(id);
+    const target = document.getElementById(id);
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  const bodyEl = $('#subBody');
+  if (!bodyEl) return;
+  let ticking = false;
+  bodyEl.addEventListener('scroll', () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      ticking = false;
+      const navBottom = nav.getBoundingClientRect().bottom;
+      let cur = PROB_SECTIONS[0].id;
+      PROB_SECTIONS.forEach(s => {
+        const el = document.getElementById(s.id);
+        if (el && el.getBoundingClientRect().top <= navBottom + 6) cur = s.id;
+      });
+      setActive(cur);
+    });
+  }, { passive: true });
+}
+
 function renderProbabilityPage() {
   const s = state.settings;
   const dn = esc(taName());
   subShell('概率与行为', `
-    <div class="panel">
+    <div class="settings-nav" id="settingsNav"></div>
+    <div class="panel" id="section-reply">
       <div class="panel-title">字卡回复</div>
       ${sliderRowHTML('字卡回复概率', '未触发回复时，在你的消息下显示「已读」小字', 'replyChance', s.replyChance, 0, 100, '%')}
       ${sliderRowHTML('表情包发送概率', `普通回复命中后，本次改为发送一张共享表情包的概率；表情包与「表情包管理」共用同一套库，库为空时自动回退为字卡回复；表情包单条发送，不参与拼接与连发`, 'emojiSendChance', s.emojiSendChance, 0, 100, '%')}
@@ -14436,28 +14541,28 @@ function renderProbabilityPage() {
         ${sliderRowHTML('连发最多条数', '最大值不得小于最小值；关闭开关后只发 1 条', 'burstMax', s.burstMax, 1, 6, '条')}
       </div>
     </div>
-    <div class="panel">
+    <div class="panel" id="section-chat">
       <div class="panel-title">聊天互动</div>
       ${sliderRowHTML(`${dn}撤回消息概率`, `${dn} 发出文字或表情消息后，按该概率在数秒后撤回`, 'taRecallChance', s.taRecallChance, 0, 100, '%')}
       ${sliderRowHTML(`${dn}引用消息概率`, `${dn} 回复时按该概率引用你之前的一条消息`, 'taQuoteChance', s.taQuoteChance, 0, 100, '%')}
     </div>
-    <div class="panel">
+    <div class="panel" id="section-call">
       <div class="panel-title">语音来电</div>
       ${sliderRowHTML('来电触发概率', '每 3~6 分钟判定一次，判定时再乘以该概率', 'callChance', s.callChance, 0, 100, '%')}
       ${sliderRowHTML('梦角接听概率', `我打给${dn}时是否接听`, 'answerChance', s.answerChance, 0, 100, '%')}
     </div>
-    <div class="panel">
+    <div class="panel" id="section-transfer">
       <div class="panel-title">转账、礼物与链接</div>
       ${sliderRowHTML(`${dn}收款概率`, `我发起转账后${dn}是否收款`, 'redPacketClaimChance', s.redPacketClaimChance, 0, 100, '%')}
       ${sliderRowHTML(`${dn}主动转账概率`, `每 30~90 分钟判定一次，命中后${dn}主动转来一笔转账`, 'taRedPacketChance', s.taRedPacketChance, 0, 100, '%')}
       ${sliderRowHTML(`${dn}送礼概率`, `每 4~8 小时判定一次，命中后${dn}主动送你一份礼物`, 'taGiftChance', s.taGiftChance, 0, 100, '%')}
       <div class="muted" style="font-size:12px;line-height:1.6;margin-top:6px">链接测试中，${dn} 会在每题的选项里完全随机作答，不设正确率参数。</div>
     </div>
-    <div class="panel">
+    <div class="panel" id="section-location">
       <div class="panel-title">梦角定位</div>
       ${sliderRowHTML('定位刷新冷却时间', '每次随机刷新后需等待的秒数；0 表示不限制，最长 3600 秒，每个梦角独立计算', 'locationCooldown', s.locationCooldown, 0, 3600, '秒')}
     </div>
-    <div class="panel">
+    <div class="panel" id="section-moment">
       <div class="panel-title">留影时刻</div>
       <div class="slider-row row-between">
         <div>
@@ -14472,7 +14577,7 @@ function renderProbabilityPage() {
         ${sliderRowHTML('截取条数', '随机截取多少条聊天记录', 'snapshotCount', s.snapshotCount, 3, 20, '条')}
       </div>
     </div>
-    <div class="panel">
+    <div class="panel" id="section-proactive">
       <div class="panel-title">字卡主动回复</div>
       <div class="slider-row row-between">
         <div>
@@ -14488,16 +14593,16 @@ function renderProbabilityPage() {
       </div>
       <div class="muted" style="margin-top:4px">字卡为空时不发送；与用户发消息后的回复判定互不影响。</div>
     </div>
-    <div class="panel">
+    <div class="panel" id="section-focus">
       <div class="panel-title">一起专注</div>
       ${sliderRowHTML('一起专注梦角发言概率', `专注过程中每 3~8 分钟判定一次，命中后${dn}说一句话陪伴`, 'pomodoroSpeakChance', s.pomodoroSpeakChance, 0, 100, '%')}
     </div>
-    <div class="panel">
+    <div class="panel" id="section-space">
       <div class="panel-title">空间互动</div>
       ${sliderRowHTML('空间点赞概率', `发布动态后${dn}点赞的概率`, 'spaceLikeChance', s.spaceLikeChance, 0, 100, '%')}
       ${sliderRowHTML('空间评论概率', `发布动态后${dn}评论的概率，评论由字卡拼接`, 'spaceCommentChance', s.spaceCommentChance, 0, 100, '%')}
     </div>
-    <div class="panel">
+    <div class="panel" id="section-ta-space">
       <div class="panel-title">${dn}主动发空间</div>
       <div class="slider-row row-between">
         <div>
@@ -14513,13 +14618,13 @@ function renderProbabilityPage() {
       </div>
       <div class="muted" style="margin-top:4px">动态内容由字卡拼接生成；字卡库为空时使用兜底文案（如「我想你了」）。判定时间戳会持久化，刷新后接着算。</div>
     </div>
-    <div class="panel">
+    <div class="panel" id="section-pat">
       <div class="panel-title">拍一拍</div>
       ${sliderRowHTML(`${dn}拍我概率`, '每次冷却到点后按该概率拍你', 'patChance', s.patChance, 0, 100, '%')}
       ${sliderRowHTML('拍一拍冷却', '两次拍一拍之间的最小间隔，单位秒；0 表示不限制', 'patCooldown', s.patCooldown, 0, 120, '秒')}
       <div class="muted" style="margin-top:4px">双击聊天页 ${dn} 的头像（顶部头像或 ${dn} 消息气泡旁的头像）即可拍 ${dn}，两个入口共用冷却；拍一拍固定单张字卡、不参与字卡拼接（在「拍一拍」页配置），不参与连发条数；通话中 ${dn} 不主动拍。</div>
     </div>
-    <div class="panel">
+    <div class="panel" id="section-read">
       <div class="panel-title">一起读书</div>
       ${sliderRowHTML(`${dn}接受共读概率`, '我发起共读邀请后，2 秒内按该概率判定是否接受', 'readTogetherAcceptChance', s.readTogetherAcceptChance, 0, 100, '%')}
       ${sliderRowHTML('陪读消息发送间隔', `共读时每隔多少分钟由字卡弹一条陪读消息；0 表示关闭（不发送陪读消息）`, 'readCompanionInterval', s.readCompanionInterval, 0, 60, '分钟')}
@@ -14527,6 +14632,8 @@ function renderProbabilityPage() {
       <div class="muted" style="margin-top:4px">陪读消息只出现在阅读界面的悬浮小聊天框，不会写进主聊天；字卡为空时不发送。</div>
     </div>
     <div class="tip-box">修改立即保存。所有概率参数都会写入本地存储、统计与备份文件。</div>`);
+
+  renderSettingsNav();   /* 生成吸顶分类导航并绑定点击 / 滚动联动 */
 
   bindProbSlider('replyChance', 'replyChanceRange', 'replyChanceNum', 0, 100);
   bindProbSlider('emojiSendChance', 'emojiSendChanceRange', 'emojiSendChanceNum', 0, 100);
