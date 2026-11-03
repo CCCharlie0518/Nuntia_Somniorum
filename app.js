@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.3.1';
+const APP_VERSION = 'v8.4.0';
 
 /* =========================================================
  * 一、基础工具函数
@@ -1640,13 +1640,13 @@ function showToast(text) {
 }
 
 function showModal(opt) {
-  const { title = '', body = '', actions = [], wide = false, onMount = null } = opt || {};
+  const { title = '', titleRight = null, body = '', actions = [], wide = false, onMount = null } = opt || {};
   const root = $('#modalRoot');
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal${wide ? ' wide' : ''}">
-      ${title ? `<div class="modal-title">${esc(title)}</div>` : ''}
+      ${title ? `<div class="modal-title${titleRight ? ' has-right' : ''}">${esc(title)}${titleRight ? `<button class="modal-title-action" type="button">${esc(titleRight.label || '')}</button>` : ''}</div>` : ''}
       <div class="modal-body">${body}</div>
       ${actions.length ? `<div class="modal-actions">${actions.map((a, i) =>
         `<button class="mbtn ${a.kind || ''}" data-mi="${i}">${esc(a.label)}</button>`).join('')}</div>` : ''}
@@ -1676,6 +1676,11 @@ function showModal(opt) {
     });
   });
   if (typeof onMount === 'function') onMount(overlay, close);
+  /* 标题右侧的次级操作按钮（如「查看历史心情」） */
+  if (titleRight && typeof titleRight.onClick === 'function') {
+    const trBtn = $('.modal-title-action', overlay);
+    if (trBtn) trBtn.addEventListener('click', () => titleRight.onClick(overlay, close));
+  }
   requestAnimationFrame(() => overlay.classList.add('show'));
   return { el: overlay, close };
 }
@@ -2028,6 +2033,7 @@ function previewOf(m, role) {
   if (m.type === 'redpacket') return '[转账] ¥' + Number(m.amount || 0).toFixed(2) + ' ' + (m.blessing || '');
   if (m.type === 'gift') return '[礼物] ' + (m.giftName || '');
   if (m.type === 'location') return '[定位] ' + (m.name || '');
+  if (m.type === 'mood') return '[心情] ' + (m.moodEmoji || '💭') + ' ' + (m.moodName || '');
   if (m.type === 'readInvite') return '[一起读书] ' + ((m.status || 'pending') === 'accepted' ? '共读邀请已接受' : (m.status === 'rejected' ? '共读邀请已拒绝' : '共读邀请'));
   /* 系统提示等旧存文本中的「TA」按当前梦角名字动态替换显示 */
   if (m.role === 'system') return String(m.content || '').replace(/TA/g, dn);
@@ -2627,6 +2633,7 @@ function quoteTextOf(m) {
   if (m.type === 'redpacket') return '[转账] ¥' + Number(m.amount || 0).toFixed(2);
   if (m.type === 'gift') return '[礼物] ' + (m.giftName || '');
   if (m.type === 'location') return '[定位] ' + (m.name || '');
+  if (m.type === 'mood') return '[心情] ' + (m.moodName || '');
   if (m.type === 'call') return '[通话]';
   if (m.type === 'quiz') return '[问卷]';
   if (m.type === 'quizAnswer') return '[问卷回答]';
@@ -2647,6 +2654,7 @@ function copyTextOf(m) {
   if (m.type === 'redpacket') return '[转账] ¥' + Number(m.amount || 0).toFixed(2);
   if (m.type === 'gift') return '[礼物] ' + (m.giftName || '');
   if (m.type === 'location') return '[定位] ' + (m.name || '');
+  if (m.type === 'mood') return '[心情] ' + (m.moodName || '') + (m.reason ? ' ' + m.reason : '');
   if (m.type === 'call') return '[通话]';
   if (m.type === 'quiz') return (m.quiz && m.quiz.title) ? ('[问卷] ' + m.quiz.title) : '[问卷]';
   if (m.type === 'quizAnswer') return (m.quiz && m.quiz.title) ? ('[问卷回答] ' + m.quiz.title) : '[问卷回答]';
@@ -2733,6 +2741,11 @@ function renderChatPage(roleId) {
         <div class="csch-input-wrap">${CHAT_SEARCH_ICON}<input id="chatSearchInput" type="search" placeholder="搜索聊天记录" autocomplete="off"></div>
         <button class="csch-cancel" id="chatSearchCancel" type="button">取消</button>
       </div>
+      <div class="search-filter-bar">
+        <button class="filter-btn active" data-filter="all" type="button">全部</button>
+        <button class="filter-btn" data-filter="mine" type="button">我说的</button>
+        <button class="filter-btn" data-filter="theirs" type="button">TA说的</button>
+      </div>
       <div class="csch-results" id="search-results-list"><div class="csch-empty">输入关键词搜索聊天记录</div></div>
     </div>
     <div class="chat-scroll" id="chatScroll"><div class="chat-list" id="chatList"></div></div>
@@ -2746,6 +2759,7 @@ function renderChatPage(roleId) {
         <button class="plus-cell" data-plus="snapshot"><span>${APP_ICONS.snapshots}</span>留影</button>
         <button class="plus-cell" data-plus="location"><span>${APP_ICONS.location}</span>定位</button>
         <button class="plus-cell" data-plus="read"><span>${APP_ICONS.readtogether}</span>邀请一起读</button>
+        <button class="plus-cell" data-plus="mood"><span>${APP_ICONS.mood}</span>记录心情</button>
       </div>
     </div>
     <div class="chat-quote-bar hidden" id="chatQuoteBar">
@@ -2831,6 +2845,14 @@ function renderChatPage(roleId) {
   }
   const cschCancel = $('#chatSearchCancel');
   if (cschCancel) cschCancel.addEventListener('click', () => closeChatSearch());
+  /* 发送者筛选标签：切换选中态后只对已有全量结果重新过滤，不重新搜索 */
+  const cschFilterBtns = $$('.search-filter-bar .filter-btn');
+  cschFilterBtns.forEach(btn => btn.addEventListener('click', () => {
+    cschFilterBtns.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentSearchFilter = btn.dataset.filter || 'all';
+    applySearchFilter(roleId);
+  }));
   /* 结果列表点击委托：加载更多 / 跳到对应消息并高亮 */
   const cschList = $('#search-results-list');
   if (cschList) cschList.addEventListener('click', e => {
@@ -2868,6 +2890,7 @@ function renderChatPage(roleId) {
     else if (kind === 'ledger') enterLedgerMode(roleId);
     else if (kind === 'snapshot') setChatSelectMode(true);
     else if (kind === 'location') openLocationComposer(roleId);
+    else if (kind === 'mood') openMoodComposer(roleId);
     else if (kind === 'read') inviteReadTogether(roleId, 'chat');
     else if (kind === 'quiz') { pendingQuizRoleId = roleId; navigate({ page: 'sub', name: 'quiz-new' }); }
   }));
@@ -2960,6 +2983,105 @@ function openLocationComposer(roleId) {
     /* content 作为兜底预览文本（会话列表 / 引用 / 复制降级都读它），卡片渲染走 name+emoji */
     sendUserMessage(roleId, { type: 'location', name, emoji, content: '[定位] ' + name });
   });
+}
+
+/* =========================================================
+ * 记录心情：「+」面板 → 弹窗（预设心情 + 自定义名称/Emoji + 原因备注）→ 发心情卡片
+ * 消息结构：{ type:'mood', moodName, moodEmoji, reason, content:'[心情] xx' }
+ * 走 sendUserMessage 统一入口：自动持久化、触发 TA 延迟回复（字卡）、拾光瓶集星
+ * ========================================================= */
+const MOOD_PRESETS = [
+  { name: '开心', emoji: '😊' },
+  { name: '难过', emoji: '😭' },
+  { name: '生气', emoji: '😡' },
+  { name: '疲惫', emoji: '😪' },
+  { name: '兴奋', emoji: '🥰' },
+  { name: '无聊', emoji: '🥱' },
+  { name: '焦虑', emoji: '😰' },
+  { name: '平静', emoji: '😌' }
+];
+
+function openMoodComposer(roleId) {
+  if (!roleById(roleId)) return;
+  const modal = showModal({
+    title: '记录心情',
+    /* 标题右侧的历史入口：先关弹窗，再跳二级页并渲染心情历史 */
+    titleRight: {
+      label: '查看历史心情',
+      onClick: (overlay, close) => { close(); navigate({ page: 'sub', name: 'mood-history' }); }
+    },
+    body: `
+      <div class="mood-presets">
+        ${MOOD_PRESETS.map(p => `<button class="mood-preset" data-moodname="${esc(p.name)}" data-moodemoji="${p.emoji}"><span class="me">${p.emoji}</span>${esc(p.name)}</button>`).join('')}
+      </div>
+      <div class="loc-fields">
+        <input class="loc-input grow" id="moodNameInput" maxlength="12" placeholder="心情名称，如：想见你">
+        <input class="loc-input slim" id="moodEmojiInput" type="text" maxlength="4" placeholder="Emoji" value="💭">
+      </div>
+      <textarea class="mood-reason-input" id="moodReasonInput" maxlength="120" rows="3" placeholder="写点原因（选填）"></textarea>
+      <button class="loc-send" id="moodSendBtn">发送</button>`
+  });
+  const root = modal.el;
+  const nameInput = $('#moodNameInput', root);
+  const emojiInput = $('#moodEmojiInput', root);
+  const reasonInput = $('#moodReasonInput', root);
+
+  /* 点预设：自动把心情名称和 Emoji 填入输入框 */
+  $$('.mood-preset', root).forEach(btn => btn.addEventListener('click', () => {
+    $$('.mood-preset', root).forEach(b => b.classList.toggle('sel', b === btn));
+    if (nameInput) nameInput.value = btn.dataset.moodname;
+    if (emojiInput) emojiInput.value = btn.dataset.moodemoji;
+  }));
+  /* 手动改动任一输入框 → 取消预设高亮（内容已与预设不一致） */
+  [nameInput, emojiInput].forEach(el => {
+    if (el) el.addEventListener('input', () => $$('.mood-preset', root).forEach(b => b.classList.remove('sel')));
+  });
+
+  $('#moodSendBtn', root).addEventListener('click', () => {
+    const moodName = String((nameInput && nameInput.value) || '').trim();
+    if (!moodName) { showToast('先选一个心情或输入心情名称'); return; }
+    const moodEmoji = String((emojiInput && emojiInput.value) || '').trim() || '💭';  /* Emoji 留空时兜底 💭 */
+    const reason = String((reasonInput && reasonInput.value) || '').trim();
+    modal.close();
+    /* content 作为兜底预览文本（会话列表 / 引用 / 复制降级都读它），卡片渲染走 moodName + moodEmoji + reason */
+    sendUserMessage(roleId, { type: 'mood', moodName, moodEmoji, reason, content: '[心情] ' + moodName });
+  });
+}
+
+/* 心情卡片：尺寸/内边距/背景/文字色与定位卡片完全同款（均取转账「未接收」深色卡的主题变量） */
+function moodCardHTML(m, quoteHTML = '') {
+  const name = esc(m.moodName || '心情');
+  const emoji = esc(m.moodEmoji || '💭');
+  const reason = String(m.reason || '').trim();
+  return `<div class="bubble loc-bubble mood-bubble">
+    ${quoteHTML}
+    <div class="mood-title">心情</div>
+    <div class="mood-divider"></div>
+    <div class="mood-main"><span class="mood-emoji">${emoji}</span><span class="mood-name">${name}</span></div>
+    ${reason ? `<div class="mood-reason">${esc(reason)}</div>` : ''}
+  </div>`;
+}
+
+/* YYYY-MM-DD HH:mm（心情历史专用格式） */
+function fmtFullTime(ts) {
+  const d = new Date(ts);
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
+    + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+}
+
+/* 心情历史：倒序列出当前梦角的全部心情卡片（时间在上、卡片在下） */
+function renderMoodHistoryPage() {
+  const roleId = state.activeRoleId;
+  const moods = (roleId ? chatOf(roleId) : [])
+    .filter(m => m && m.type === 'mood' && !m.recalled)
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return subShell('心情历史', moods.length
+    ? `<div class="mood-history-list" id="mood-history-list">${moods.map(m => `
+        <div class="mh-item">
+          <div class="mh-time">${fmtFullTime(m.ts)}</div>
+          ${moodCardHTML(m)}
+        </div>`).join('')}</div>`
+    : `<div class="empty-hint">还没有记录过心情<br>在聊天页「＋」里点【记录心情】试试</div>`);
 }
 
 /* 聊天页“+”面板 / 留影选择模式 */
@@ -3243,6 +3365,9 @@ function renderChatMessages() {
         <div class="ri-sub">${esc(subTxt)}</div>
         ${lastRow}
       </div>`;
+    } else if (m.type === 'mood') {
+      /* 心情卡片：与定位卡片同尺寸，背景/文字全部走主题色变量 */
+      inner = moodCardHTML(m, quoteHTML);
     } else if (m.type === 'location') {
       /* 定位卡片：标题 + 分割线 + 地图底纹区（网格底纹 / 居中图钉 / 底部地名标签） */
       inner = `<div class="bubble loc-bubble">
@@ -3327,10 +3452,12 @@ function renderChatMessages() {
    入口在聊天页右上角三点菜单；遮罩层 DOM 随 renderChatPage 模板一起渲染，
    离开/重进聊天页时模板重建，搜索状态自动清空，无需额外路由清理 */
 /* 搜索性能优化：全量搜索 + 分页渲染
-   内存里永远保存完整结果集 currentSearchResults（不截断，保证搜全），
-   DOM 只渲染前 searchRenderLimit 条，底部「加载更多」按钮每次 +20 */
-let currentSearchResults = [];      /* 当前关键词的全量匹配结果 */
+   rawSearchResults 保存关键词全量命中（不截断，保证搜全），
+   currentSearchResults 是按发送者筛选后的结果，DOM 只渲染前 searchRenderLimit 条 */
+let rawSearchResults = [];          /* 关键词全量命中（未按发送者筛选），切换筛选时只过滤这个数组 */
+let currentSearchResults = [];      /* 当前筛选后的结果（分页渲染的数据源） */
 let currentSearchKeyword = '';      /* 当前关键词（结果高亮与加载更多时复用） */
+let currentSearchFilter = 'all';    /* 发送者筛选：'all' | 'mine' | 'theirs' */
 let searchRenderLimit = 20;         /* 当前已渲染到 DOM 的条数 */
 const SEARCH_PAGE_SIZE = 20;        /* 每页渲染条数 / 加载更多步长 */
 let searchDebounceTimer = 0;        /* 输入防抖计时器 */
@@ -3341,21 +3468,39 @@ function scheduleChatSearch(roleId, kw) {
   searchDebounceTimer = setTimeout(() => runChatSearch(roleId, kw), 300);
 }
 
-/* 全量搜索：一次性找出所有匹配消息存入内存（不截断），只把渲染窗口重置为第一页 */
+/* 全量搜索：一次性找出所有匹配消息存入 rawSearchResults（不截断），再按筛选标签出结果 */
 function runChatSearch(roleId, kwRaw) {
   clearTimeout(searchDebounceTimer);
   currentSearchKeyword = String(kwRaw || '').trim();
-  currentSearchResults = currentSearchKeyword ? chatSearchMatches(roleId, currentSearchKeyword) : [];
+  rawSearchResults = currentSearchKeyword ? chatSearchMatches(roleId, currentSearchKeyword) : [];
+  applySearchFilter(roleId);
+}
+
+/* 按发送者筛选：只对 rawSearchResults 做过滤，不重新遍历聊天记录；随后重置分页并渲染 */
+function applySearchFilter(roleId) {
+  const f = currentSearchFilter;
+  currentSearchResults = f === 'all' ? rawSearchResults.slice()
+    : rawSearchResults.filter(m => wcMsgSender(m) === (f === 'mine' ? 'user' : 'ta'));
   searchRenderLimit = SEARCH_PAGE_SIZE;
   renderChatSearchResults(roleId);
+}
+
+/* 把筛选按钮的选中态同步为指定值（打开/关闭搜索层时复位为「全部」） */
+function resetSearchFilterUI(layer) {
+  currentSearchFilter = 'all';
+  $$('.search-filter-bar .filter-btn', layer).forEach(b => {
+    b.classList.toggle('active', b.dataset.filter === 'all');
+  });
 }
 
 function openChatSearch(roleId) {
   const layer = $('#chat-search-layer');
   if (!layer) return;
-  /* 重置上一轮搜索状态后再渲染空态 */
+  /* 重置上一轮搜索状态（含筛选）后再渲染空态 */
   currentSearchKeyword = '';
+  rawSearchResults = [];
   currentSearchResults = [];
+  resetSearchFilterUI(layer);
   searchRenderLimit = SEARCH_PAGE_SIZE;
   renderChatSearchResults(roleId);
   layer.classList.add('open');
@@ -3372,7 +3517,9 @@ function closeChatSearch() {
   const input = $('#chatSearchInput');
   if (input) { input.value = ''; input.blur(); }
   currentSearchKeyword = '';
+  rawSearchResults = [];
   currentSearchResults = [];
+  resetSearchFilterUI(layer);
   searchRenderLimit = SEARCH_PAGE_SIZE;
   renderChatSearchResults(currentRoute.roleId);
 }
@@ -5007,6 +5154,8 @@ const APP_ICONS = {
   reminder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 16v-5a6 6 0 1 0-12 0v5l-2 2h16Z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>',
   /* 拾光瓶：线条风玻璃瓶（软木塞 + 瓶颈 + 瓶内一颗星） */
   jar: '<svg viewBox="0 0 24 24"><path d="M9.5 3.4h5"/><path d="M10 3.4v4.2c0 .5-.17.98-.5 1.38A5.2 5.2 0 0 0 6.6 13.4v3.4A3.9 3.9 0 0 0 10.5 20.6h3a3.9 3.9 0 0 0 3.9-3.9v-3.4a5.2 5.2 0 0 0-2.9-4.42.9.9 0 0 1-.5-.78V3.4"/><path d="m12 11.6.66 1.46 1.58.17-1.18 1.08.33 1.56L12 15.2l-1.39.67.33-1.56-1.18-1.08 1.58-.17Z"/></svg>',
+  /* 记录心情：心电图爱心（专属图标，避免与表情包笑脸撞车；尺寸由 .plus-cell svg 统一控制） */
+  mood: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path><polyline points="6 12 9 12 11 9 14 15 16 12 19 12"></polyline></svg>',
   /* 检查更新：线条风循环刷新（尺寸与描边由 .app-update-btn svg 统一控制） */
   refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>'
 };
@@ -10280,6 +10429,7 @@ function renderSub(name) {
     case 'pat': return renderPatPage();
     case 'pet': return renderPetPage();
     case 'wordcloud': return renderWordCloudPage();  /* 互动词云：聊天页快捷菜单进入 */
+    case 'mood-history': return renderMoodHistoryPage();  /* 心情历史：从「记录心情」弹窗标题右侧进入 */
     case 'play': return renderPlayPage();            /* 一起玩：一起做 → 一起玩 → 五子棋 的二级页 */
     case 'games': return renderPlayPage();           /* 旧路由兜底：桌面小游戏已并入【一起玩】 */
     case 'readtogether': return renderReadTogetherPage();
