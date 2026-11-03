@@ -2,7 +2,11 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.4.0';
+const APP_VERSION = 'v8.5.0';
+
+/* 留影时刻：单次可截取的消息条数上限。
+ * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
+const SNAPSHOT_MAX_ITEMS = 100;
 
 /* =========================================================
  * 一、基础工具函数
@@ -965,7 +969,7 @@ function mergeState(saved) {
     out.settings[k] = Number.isFinite(v) ? clamp(v, 0, 100) : d.settings[k];
   });
   const snapN = Number(out.settings.snapshotCount);
-  out.settings.snapshotCount = Number.isFinite(snapN) ? clamp(Math.round(snapN), 3, 20) : d.settings.snapshotCount;
+  out.settings.snapshotCount = Number.isFinite(snapN) ? clamp(Math.round(snapN), 3, SNAPSHOT_MAX_ITEMS) : d.settings.snapshotCount;
   const snapI = Number(out.settings.autoSnapshotInterval);
   out.settings.autoSnapshotInterval = Number.isFinite(snapI) ? clamp(Math.round(snapI), 30, 720) : d.settings.autoSnapshotInterval;
   /* 回复延迟（秒）：范围 0~300，默认 1~3 秒，最长不小于最短 */
@@ -1370,9 +1374,13 @@ function mergeState(saved) {
       /* TA 主动写来的信：保留来源标记，刷新后仍显示「来自 TA」 */
       fromTa: sender === 'ta',
       /* 来信系统通知去重标记：旧数据缺省视为未通知 */
-      isNotified: letter.isNotified === true
+      isNotified: letter.isNotified === true,
+      /* 收藏标记：必须进归一化白名单，否则刷新后收藏状态被整体丢弃；
+         严格 === true 判定——旧数据没有该字段、或被误存成字符串 "true" 时都安全视为未收藏 */
+      isFavorite: letter.isFavorite === true
     };
   });
+  console.log('读取到的所有信件:', out.letters);
 
   out.moments = out.moments.map(m => {
     const hasInteract = Number(m.interactAt) > 0;
@@ -2778,7 +2786,7 @@ function renderChatPage(roleId) {
     </div>
     <div class="chat-selectbar hidden" id="chatSelBar">
       <button id="selCancel">取消</button>
-      <button id="selRandom">随机选 ${clamp(Number(state.settings.snapshotCount) || 5, 3, 20)}</button>
+      <button id="selRandom">随机选 ${clamp(Number(state.settings.snapshotCount) || 5, 3, SNAPSHOT_MAX_ITEMS)}</button>
       <button class="primary" id="selConfirm">确认留影</button>
     </div>`;
 
@@ -3120,9 +3128,10 @@ function chatSelectableMessages(roleId) {
 }
 
 function randomSelectChat(roleId) {
-  const pool = chatSelectableMessages(roleId).slice(-40);
+  /* 候选池从最近 40 条放宽到最近 100 条，配合上调后的截取条数上限 */
+  const pool = chatSelectableMessages(roleId).slice(-SNAPSHOT_MAX_ITEMS);
   if (!pool.length) { showToast('聊天记录太少，暂时无法留影'); return; }
-  const n = clamp(Number(state.settings.snapshotCount) || 5, 3, 20);
+  const n = clamp(Number(state.settings.snapshotCount) || 5, 3, SNAPSHOT_MAX_ITEMS);
   chatSelectedIds = new Set(pickMany(pool, Math.min(n, pool.length)).map(m => m.id));
   renderChatMessages();
 }
@@ -3131,9 +3140,11 @@ function confirmChatSnapshot(roleId) {
   const msgs = chatOf(roleId).filter(m => chatSelectedIds.has(m.id));
   if (!msgs.length) { showToast('请先勾选要留影的消息'); return; }
   msgs.sort((a, b) => a.ts - b.ts);
+  /* 性能保护：一次剪影三四十条以上，保存与后续生成长图都可能耗时，先提示避免用户以为卡死 */
+  if (msgs.length > 30) showToast('正在生成长图，请稍候...');
   saveSnapshot(roleId, snapshotItemsFrom(msgs), '我');
   setChatSelectMode(false);
-  showToast('已留影这一刻');
+  setTimeout(() => showToast('已留影这一刻'), msgs.length > 30 ? 300 : 0);
 }
 
 /* =========================================================
@@ -3211,9 +3222,25 @@ function ensureChatDelegation(list) {
     if (chatSelectMode) {
       const el = t.closest('.msg[data-mid]');
       if (!el) return;
+      /* 阻止默认行为与冒泡：留影选择模式下整条消息就是勾选区，
+         避免冒泡到其它委托分支、也避免任何包裹元素的默认动作引起页面跳动 */
+      e.preventDefault();
+      e.stopPropagation();
       const id = el.dataset.mid;
-      if (chatSelectedIds.has(id)) chatSelectedIds.delete(id); else chatSelectedIds.add(id);
-      renderChatMessages();
+      const on = !chatSelectedIds.has(id);
+      /* 上限保护：放宽到 100 条，超过时拦截并提示（防止极端长图拖垮手机） */
+      if (on && chatSelectedIds.size >= SNAPSHOT_MAX_ITEMS) {
+        showToast(`单次留影最多可选 ${SNAPSHOT_MAX_ITEMS} 条`);
+        return;
+      }
+      if (on) chatSelectedIds.add(id); else chatSelectedIds.delete(id);
+      /* 局部更新：只改这一条消息的选中态，绝不重渲染整个列表。
+         原先这里调 renderChatMessages()，而该函数结尾强制 scrollTop = scrollHeight，
+         导致往上滑勾选旧消息时页面被瞬间拽回最底端；
+         仅切 class / 改勾号不会改变布局高度，滚动位置天然保持纹丝不动 */
+      el.classList.toggle('selected', on);
+      const chk = $('.sel-check', el);
+      if (chk) chk.textContent = on ? '✓' : '';
     }
   });
 }
@@ -9347,8 +9374,8 @@ function snapshotItemsFrom(msgs) {
 }
 
 function randomSnapshotItems(roleId) {
-  const n = clamp(Number(state.settings.snapshotCount) || 5, 3, 20);
-  const pool = chatOf(roleId).filter(m => m.role !== 'system').slice(-40);
+  const n = clamp(Number(state.settings.snapshotCount) || 5, 3, SNAPSHOT_MAX_ITEMS);
+  const pool = chatOf(roleId).filter(m => m.role !== 'system').slice(-SNAPSHOT_MAX_ITEMS);
   const picked = pickMany(pool, Math.min(n, pool.length)).sort((a, b) => a.ts - b.ts);
   return snapshotItemsFrom(picked);
 }
@@ -9452,7 +9479,8 @@ function snapshotHTML(rec, showFoot = true) {
 /* 把留影卡片绘制成 PNG 图片的 DataURL（Canvas 绘制，不依赖 html2canvas） */
 function snapshotToDataURL(rec) {
   try {
-    const dpr = 2;
+    /* 绘制倍率：默认 2 倍高清；长图时会在算出总高度后自适应下调，避免超出 canvas 上限 */
+    let dpr = 2;
     const PAD = 28, GAP = 10, BODY_PAD = 16, BPAD_X = 18, BPAD_Y = 12;
     const W = 720;
     const BODY_W = W - PAD * 2;
@@ -9507,6 +9535,15 @@ function snapshotToDataURL(rec) {
     const bodyH = BODY_PAD * 2 + rows.reduce((s, r) => s + r.h, 0) + GAP * Math.max(0, rows.length - 1);
     const HEAD_H = 32, BY_H = 24;
     const H = PAD + HEAD_H + 14 + bodyH + 10 + BY_H + PAD;
+
+    /* 长图保护：消息条数越多 H 越大，按「总面积 1600 万像素 / 单边 32760px」两条上限
+       自适应降低 dpr，保证 100 条也一定能画出图（内容高度绝不截断） */
+    const MAX_AREA = 16000000;
+    const MAX_SIDE = 32760;
+    if (W * dpr * H * dpr > MAX_AREA || H * dpr > MAX_SIDE) {
+      const fitDpr = Math.min(MAX_AREA / (W * H), MAX_SIDE / H);
+      dpr = Math.max(1, Math.floor(fitDpr * 100) / 100);
+    }
 
     const canvas = document.createElement('canvas');
     canvas.width = W * dpr;
@@ -9590,6 +9627,16 @@ function openSnapshotPreview(dataUrl) {
     <img class="sp-img" src="${dataUrl}" alt="留影">
     <div class="sp-tip">长按图片即可保存到手机相册</div>`;
   document.body.appendChild(box);
+  /* 长图预览自适应：高宽比超过 2.5 的留影图（条数多）改成可纵向滚动、按原比例展开，
+     避免被 72vh 压成一条细线看不清内容；普通短图保持居中显示 */
+  const spImg = box.querySelector('.sp-img');
+  const markTall = () => {
+    if (spImg && spImg.naturalWidth && spImg.naturalHeight / spImg.naturalWidth > 2.5) box.classList.add('tall');
+  };
+  if (spImg) {
+    if (spImg.complete) markTall();
+    spImg.addEventListener('load', markTall);
+  }
   const close = () => { box.remove(); document.removeEventListener('keydown', onKey); };
   const onKey = e => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onKey);
@@ -9605,7 +9652,7 @@ function renderSnapshotsPage() {
   subShell('留影时刻', `
     <div class="panel">
       <div class="panel-title">说明</div>
-      <div class="muted" style="font-size:12px;line-height:1.7">在聊天页点「＋ → 留影」可勾选消息或随机选 ${clamp(Number(state.settings.snapshotCount) || 5, 3, 20)} 条，保存成一张留影卡片。${esc(taName())} 也可能自动截屏留存，可在「概率与行为」里调整。</div>
+      <div class="muted" style="font-size:12px;line-height:1.7">在聊天页点「＋ → 留影」可勾选消息（单次最多 ${SNAPSHOT_MAX_ITEMS} 条）或随机选 ${clamp(Number(state.settings.snapshotCount) || 5, 3, SNAPSHOT_MAX_ITEMS)} 条，保存成一张留影卡片。${esc(taName())} 也可能自动截屏留存，可在「概率与行为」里调整。</div>
     </div>
     <div class="snap-filter">
       <select id="snapFilterRole" style="flex:1;padding:9px 10px;border-radius:10px;border:.5px solid rgba(60,60,67,.15);background:#fff;font-size:13px">
@@ -9646,6 +9693,13 @@ function renderSnapshotsPage() {
   $$('[data-snapexport]').forEach(b => b.addEventListener('click', () => {
     const rec = state.snapshots.find(s => s.id === b.dataset.snapexport);
     if (!rec) return;
+    const n = (rec.items || []).length;
+    /* 性能保护：超长图绘制耗时明显，先给提示再开始绘制，避免用户误以为卡死 */
+    if (n > 30) {
+      showToast('正在生成长图，请稍候...');
+      setTimeout(() => openSnapshotPreview(snapshotToDataURL(rec)), 60);
+      return;
+    }
     openSnapshotPreview(snapshotToDataURL(rec));
   }));
   $$('[data-snapdel]').forEach(b => b.addEventListener('click', async () => {
@@ -11587,7 +11641,6 @@ function renderPatLibBox() {
     <div class="pat-lib-head">
       <div class="pat-lib-stat"><b>${lib.length}</b><span>共 ${enabledCount} 条启用</span></div>
       <div class="pat-lib-btns">
-        <button class="mini-btn" data-pat-add>＋ 添加</button>
         <button class="mini-btn" data-pat-import>导入</button>
         <button class="mini-btn" data-pat-export>导出</button>
         <button class="mini-btn" data-pat-dedupe>查重</button>
@@ -11604,7 +11657,7 @@ function renderPatLibBox() {
           <button class="mini-btn danger" data-pat-del="${c.id}">删除</button>
         </div>
       </div>`).join('')}</div>`
-      : `<div class="pat-empty">${kw ? '没有匹配的字卡' : '这个字卡库还是空的，点「＋ 添加」或「导入」开始吧'}</div>`}
+      : `<div class="pat-empty">${kw ? '没有匹配的字卡' : '这个字卡库还是空的，点「导入」开始吧'}</div>`}
   `;
   const searchInput = $('#patSearchInput');
   if (searchInput) searchInput.addEventListener('input', () => {
@@ -11615,7 +11668,6 @@ function renderPatLibBox() {
     if (next) { next.focus({ preventScroll: true }); try { next.setSelectionRange(pos, pos); } catch (e) {} }
   });
   const bindPat = (sel, fn) => { const el = $(sel, box); if (el) el.addEventListener('click', fn); };
-  bindPat('[data-pat-add]', () => openPatAddModal());
   bindPat('[data-pat-import]', () => openPatImportModal());
   bindPat('[data-pat-export]', () => {
     downloadJSON(patLib(patTab), patTab === 'user' ? 'pat-cards-user.json' : 'pat-cards-ta.json');
@@ -11702,33 +11754,6 @@ function patDedupe() {
   });
 }
 
-function openPatAddModal() {
-  showModal({
-    title: '添加拍一拍字卡',
-    body: `<div class="field"><label>字卡内容（每行一条，可批量添加）</label><textarea class="input" id="patAddText" rows="5" placeholder="每行一条拍一拍文案…"></textarea></div>`,
-    actions: [
-      { label: '取消' },
-      { label: '添加', kind: 'primary', onClick: () => {
-          const lines = ($('#patAddText').value || '').split('\n').map(s => s.trim()).filter(Boolean);
-          if (!lines.length) { showToast('请输入至少一条内容'); return false; }
-          const libArr = patLib(patTab);
-          const exist = new Set(libArr.map(c => c.content));
-          let added = 0;
-          lines.forEach(t => {
-            if (exist.has(t)) return;
-            exist.add(t);
-            libArr.push(normalizePatCard({ content: t }));
-            added++;
-          });
-          persist();
-          renderPatLibBox();
-          showToast(added ? `已添加 ${added} 条` : '内容已存在，未重复添加');
-          return true;
-        } }
-    ]
-  });
-}
-
 function openPatEditModal(card) {
   showModal({
     title: '编辑拍一拍字卡',
@@ -11806,6 +11831,9 @@ let cardSearch = '';
 const CARD_PAGE_SIZE = 100;
 let cardRenderLimit = CARD_PAGE_SIZE;
 let cardRenderTimer = null;
+/* 批量管理模式：进入后卡片左侧出现复选框，底部浮出操作栏 */
+let cardBatchMode = false;
+let selectedCardIds = [];
 
 function cardGroupById(id) {
   return state.cardGroups.find(g => g.id === id) || null;
@@ -11932,15 +11960,21 @@ function renderCardsPage() {
         <button class="danger" id="groupDel">删除该分组</button>
       </div>` : ''}
       <div class="btn-row">
-        <button class="btn primary" id="cardAdd">＋ 新增字卡</button>
-        <button class="btn" id="cardImport">⬆ 批量导入</button>
+        <button class="btn primary card-import-cta" id="cardImport">⬆ 批量导入</button>
         <button class="btn" id="cardDedupe">🧹 查重</button>
         <button class="btn" id="cardExport">⬇ 导出</button>
+        <button class="btn" id="cardBatch">☑ 批量管理</button>
       </div>
       <button class="btn danger block" id="cardClearAll" style="margin-top:10px">🗑 清空全部字卡</button>
       <div class="muted" style="margin-top:8px">抽取规则：从全部启用字卡中随机抽取（字卡全局共享，不再区分梦角与公共）；关闭的字卡不参与随机。</div>
     </div>
-    <div id="cardList"></div>`);
+    <div id="cardList"></div>
+    <div class="card-batch-bar${cardBatchMode ? '' : ' hidden'}" id="cardBatchBar">
+      <button class="btn-sm" id="cardSelAll" type="button">全选</button>
+      <button class="btn-sm" id="cardBatchCancel" type="button">取消</button>
+      <span class="spacer"></span>
+      <button class="btn-sm batch-del" id="cardBatchDel" type="button">删除选中 (${selectedCardIds.length})</button>
+    </div>`);
 
   /* 搜索：60ms 防抖，避免每敲一个字就把整库过滤 + 重建 DOM */
   $('#cardSearch').addEventListener('input', e => {
@@ -11966,7 +12000,19 @@ function renderCardsPage() {
     $('#groupRename').addEventListener('click', () => renameCardGroup(activeGroup.id));
     $('#groupDel').addEventListener('click', () => deleteCardGroup(activeGroup.id));
   }
-  $('#cardAdd').addEventListener('click', () => openCardEditor(null));
+  /* 批量管理：进入多选模式 / 全选当前筛选结果 / 取消 / 删除选中 */
+  $('#cardBatch').addEventListener('click', () => {
+    cardBatchMode = true;
+    selectedCardIds = [];
+    renderCardsPage();
+  });
+  $('#cardSelAll').addEventListener('click', () => {
+    selectedCardIds = filteredCards().list.map(c => c.id);
+    renderCardList();
+    updateCardBatchBar();
+  });
+  $('#cardBatchCancel').addEventListener('click', exitCardBatchMode);
+  $('#cardBatchDel').addEventListener('click', deleteSelectedCards);
   $('#cardImport').addEventListener('click', () => openCardImport());
   $('#cardDedupe').addEventListener('click', openCardDedupe);
   $('#cardExport').addEventListener('click', exportCards);
@@ -11985,14 +12031,12 @@ function renderCardsPage() {
   scheduleCardList(50);
 }
 
-function renderCardList() {
-  const box = $('#cardList');
-  if (!box) return;
+/* 字卡过滤 + 排序：renderCardList 与批量模式「全选」共用同一口径 */
+function filteredCards() {
   const q = cardSearch.trim().toLowerCase();
   /* 分组名一次建表，避免每张卡都去 state.cardGroups.find 一遍 */
   const groupNames = new Map(state.cardGroups.map(g => [g.id, g.name || '未分组']));
   const groupNameOf = c => (c.groupId && groupNames.has(c.groupId)) ? groupNames.get(c.groupId) : '未分组';
-
   const list = state.cards.filter(c => {
     if (cardFilterGroup !== 'all') {
       if (cardFilterGroup === '') {
@@ -12003,6 +12047,13 @@ function renderCardList() {
     const text = String(c.content || '').toLowerCase();
     return text.includes(q) || groupNameOf(c).toLowerCase().includes(q);
   }).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return { list, groupNameOf };
+}
+
+function renderCardList() {
+  const box = $('#cardList');
+  if (!box) return;
+  const { list, groupNameOf } = filteredCards();
 
   if (!list.length) {
     box.innerHTML = '<div class="empty">没有符合条件的字卡<br>新增或导入一些吧</div>';
@@ -12012,7 +12063,8 @@ function renderCardList() {
   /* 只渲染前 cardRenderLimit 张：卡片 DOM 保持扁平（去掉多余包裹层） */
   const shown = list.slice(0, cardRenderLimit);
   let html = shown.map(c => `
-    <div class="card-item${c.enabled === false ? ' disabled' : ''}">
+    <div class="card-item${c.enabled === false ? ' disabled' : ''}${cardBatchMode ? ' batch' : ''}">
+      ${cardBatchMode ? `<input type="checkbox" class="card-check" data-check="${c.id}"${selectedCardIds.includes(c.id) ? ' checked' : ''}>` : ''}
       <span class="chip card-tag">${esc(groupNameOf(c))}</span>
       <div class="card-text">${esc(c.content)}</div>
       <div class="card-ops">
@@ -12047,8 +12099,18 @@ function bindCardListEvents() {
     const delBtn = e.target.closest('[data-del]');
     if (delBtn) { deleteCardById(delBtn.dataset.del); return; }
   });
-  /* change 会冒泡，开关同样只绑这一次 */
+  /* change 会冒泡，开关与批量复选框同样只绑这一次 */
   box.addEventListener('change', e => {
+    /* 批量模式复选框：维护 selectedCardIds 并实时刷新底部计数 */
+    const chk = e.target.closest('[data-check]');
+    if (chk) {
+      const id = chk.dataset.check;
+      const idx = selectedCardIds.indexOf(id);
+      if (chk.checked && idx < 0) selectedCardIds.push(id);
+      else if (!chk.checked && idx >= 0) selectedCardIds.splice(idx, 1);
+      updateCardBatchBar();
+      return;
+    }
     const input = e.target.closest('[data-toggle]');
     if (!input) return;
     const card = state.cards.find(c => c.id === input.dataset.toggle);
@@ -12073,6 +12135,34 @@ async function deleteCardById(cardId) {
   persist();
   renderCardsPage();
   showToast('已删除');
+}
+
+/* 批量模式：刷新底部操作栏的「删除选中 (X)」计数 */
+function updateCardBatchBar() {
+  const btn = $('#cardBatchDel');
+  if (btn) btn.textContent = `删除选中 (${selectedCardIds.length})`;
+}
+
+/* 批量模式：取消退出并清空选中 */
+function exitCardBatchMode() {
+  cardBatchMode = false;
+  selectedCardIds = [];
+  renderCardsPage();
+}
+
+/* 批量模式：二次确认后删除全部选中字卡 */
+async function deleteSelectedCards() {
+  const n = selectedCardIds.length;
+  if (!n) { showToast('请先勾选要删除的字卡'); return; }
+  const ok = await confirmDialog('批量删除字卡', `确定要删除选中的 ${n} 张字卡吗？此操作不可恢复。`, '删除', true);
+  if (!ok) return;
+  const ids = new Set(selectedCardIds);
+  state.cards = state.cards.filter(c => !ids.has(c.id));
+  persist(true);
+  cardBatchMode = false;
+  selectedCardIds = [];
+  renderCardsPage();
+  showToast(`已删除 ${n} 张字卡`);
 }
 
 /* 异步渲染入口：先让页面框架出现，再插字卡 DOM；
@@ -12686,6 +12776,9 @@ function replyDelayOptionsHTML(selected, allowCustom = true) {
     `<option value="${v}"${Number(selected) === v ? ' selected' : ''}>${label}</option>`).join('');
 }
 
+/* 线条风星星：信件详情收藏按钮（未收藏灰色空心 / 已收藏金黄填充） */
+const LETTER_STAR_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>';
+
 function letterStatusChip(l) {
   const isTa = l.sender === 'ta';
   if (isTa) {
@@ -12793,7 +12886,8 @@ function checkAutoLetters(force) {
     taReplyContent: text || '想你了，所以写了这封信。',
     taReplyAt: now,
     fromTa: true,
-    isNotified: false
+    isNotified: false,
+    isFavorite: false
   };
   state.letters.push(letter);
   persist();
@@ -12809,9 +12903,16 @@ function checkAutoLetters(force) {
   return true;
 }
 
+/* 信件列表当前 Tab：all = 全部信件 / fav = 我的收藏 */
+let letterListTab = 'all';
+
 function renderLettersPage() {
   const unread = state.letters.filter(l => !l.read).length;
-  const list = state.letters.slice().sort((a, b) => b.ts - a.ts);
+  const favCount = state.letters.filter(l => l.isFavorite === true).length;
+  /* 旧数据没有 isFavorite 字段：undefined 视为未收藏（严格 === true 判定天然兼容） */
+  const list = state.letters
+    .filter(l => letterListTab !== 'fav' || l.isFavorite === true)
+    .sort((a, b) => b.ts - a.ts);
   const s = state.settings;
   const sepOpts = [['，', '逗号（，）'], ['、', '顿号（、）'], [' ', '空格'], ['\n', '换行'], ['', '无']]
     .map(p => `<option value="${p[0] === '\n' ? '&#10;' : p[0]}"${s.letterMergeSeparator === p[0] ? ' selected' : ''}>${p[1]}</option>`)
@@ -12846,6 +12947,10 @@ function renderLettersPage() {
       <div class="muted">写给${esc(taName())}的信，寄出后${esc(taName())}会按间隔回信。</div>
       <button class="btn primary" id="letterNew">＋ 写新信件</button>
     </div>
+    <div class="letter-tabs">
+      <button class="letter-tab${letterListTab === 'all' ? ' active' : ''}" data-ltab="all" type="button">全部信件</button>
+      <button class="letter-tab${letterListTab === 'fav' ? ' active' : ''}" data-ltab="fav" type="button">⭐ 我的收藏${favCount ? ` (${favCount})` : ''}</button>
+    </div>
     ${list.length ? list.map(l => {
       const role = roleById(l.roleId);
       const to = role ? role.name : '未指定收件人';
@@ -12857,7 +12962,7 @@ function renderLettersPage() {
       return `
         <div class="letter-item ${l.read ? '' : 'unread'}" data-letter="${l.id}">
           <div class="letter-head">
-            <div class="letter-title">${l.read ? '' : '🔵 '}${esc(l.title)}</div>
+            <div class="letter-title">${l.read ? '' : '🔵 '}${l.isFavorite === true ? '<span class="letter-fav-star">★</span> ' : ''}${esc(l.title)}</div>
             ${letterStatusChip(l)}
             <span class="chip">${isTa ? '来自 ' : '致 '}${esc(to)}</span>
           </div>
@@ -12870,9 +12975,22 @@ function renderLettersPage() {
             </span>
           </div>
         </div>`;
-    }).join('') : '<div class="empty">还没有信件<br>写一封给' + esc(taName()) + '的信吧</div>'}`);
+    }).join('') : (letterListTab === 'fav'
+      ? '<div class="empty">还没有收藏过信件哦，去信件详情里点亮小星星吧~</div>'
+      : '<div class="empty">还没有信件<br>写一封给' + esc(taName()) + '的信吧</div>')}`);
 
   $('#letterNew').addEventListener('click', () => navigate({ page: 'sub', name: 'letter-new' }));
+
+  /* 列表 Tab：全部信件 / 我的收藏 */
+  $$('.letter-tab').forEach(btn => btn.addEventListener('click', () => {
+    letterListTab = btn.dataset.ltab || 'all';
+    /* 保持滚动位置：subShell 会整体重建 #subBody（新元素 scrollTop 天然归零），
+       需在渲染前记录、渲染后恢复，避免切换 Tab 时页面弹回顶部 */
+    const prevTop = $('#subBody') ? $('#subBody').scrollTop : 0;
+    renderLettersPage();
+    const sb = $('#subBody');
+    if (sb) sb.scrollTop = prevTop;
+  }));
 
   /* 信件页设置：主动写信开关/间隔 + 信件全局拼接 */
   bindProbSlider('letterAutoInterval', 'letterAutoIntervalRange', 'letterAutoIntervalNum', 1, 10080);
@@ -12989,12 +13107,32 @@ function openLetter(id) {
     title: (letter.status === 'replied' || letter.status === 'userReplied') ? '往来信件' : (isTaLetter ? '来信' : '信件'),
     wide: true,
     body: `
-      <div class="muted" style="margin-bottom:10px">${isTaLetter ? '来自' : '致'} ${esc(role ? role.name : '未指定')} · ${esc(letter.date || '')}</div>
+      <div class="muted letter-fav-row" style="margin-bottom:10px">
+        <span>${isTaLetter ? '来自' : '致'} ${esc(role ? role.name : '未指定')} · ${esc(letter.date || '')}</span>
+        <button class="letter-fav-btn${letter.isFavorite === true ? ' on' : ''}" id="letterFavBtn" type="button" title="${letter.isFavorite === true ? '取消收藏' : '收藏'}">${LETTER_STAR_ICON}</button>
+      </div>
       <div style="font-size:17px;font-weight:600;margin-bottom:10px">${esc(letter.title)}</div>
       <div class="letter-body" style="box-shadow:none;padding:0">${esc(isTaLetter ? (letter.taReplyContent || letter.body) : letter.body)}</div>
       <div class="letter-sign">—— ${esc(isTaLetter ? roleName : state.my.name)}<br>${esc(letter.date || '')}</div>
       ${replyBlock}`,
-    actions
+    actions,
+    onMount: el => {
+      /* 收藏星标：切换 isFavorite 并落盘，底层列表同步刷新（弹窗保持打开） */
+      const favBtn = $('#letterFavBtn', el);
+      if (!favBtn) return;
+      favBtn.addEventListener('click', async () => {
+        /* ① letter 是 state.letters.find() 返回的数组元素原引用（非拷贝），直接改即同步到全局数据 */
+        letter.isFavorite = !letter.isFavorite;
+        /* ② IndexedDB 写入是异步的：await persist(true) 跳过 220ms 防抖立即落盘，
+           确认数据真正写入硬盘后才提示成功，杜绝"收藏后立刻刷新/关页面，防抖窗口内写入未发生"的竞态 */
+        await persist(true);
+        console.log('保存收藏状态:', letter);
+        favBtn.classList.toggle('on', !!letter.isFavorite);
+        favBtn.title = letter.isFavorite ? '取消收藏' : '收藏';
+        showToast(letter.isFavorite ? '已加入收藏夹' : '已取消收藏');
+        if (currentRoute.page === 'sub' && currentRoute.name === 'letters') renderLettersPage();
+      });
+    }
   });
   return modal;
 }
@@ -13115,7 +13253,8 @@ function renderLetterNewPage() {
       sentAt: 0,
       replyDueAt: 0,
       taReplyContent: '',
-      taReplyAt: 0
+      taReplyAt: 0,
+      isFavorite: false
     });
     persist();
     showToast('信件已保存为草稿');
@@ -13143,7 +13282,8 @@ function renderLetterNewPage() {
       sentAt: now,
       replyDueAt: due,
       taReplyContent: '',
-      taReplyAt: 0
+      taReplyAt: 0,
+      isFavorite: false
     });
     persist();
     showToast(delayMin === 0 ? '信件已寄出，' + taName() + '马上回信' : '信件已寄出，等待' + taName() + '回信');
@@ -15108,7 +15248,7 @@ function renderProbabilityPage() {
       <div id="autoSnapshotWrap"${s.autoSnapshotEnabled ? '' : ' class="range-off"'}>
         ${sliderRowHTML('自动截屏概率', '每次判定时真正截取的概率', 'autoSnapshotChance', s.autoSnapshotChance, 0, 100, '%')}
         ${sliderRowHTML('自动截屏间隔', '单位：分钟', 'autoSnapshotInterval', s.autoSnapshotInterval, 30, 720, '分钟')}
-        ${sliderRowHTML('截取条数', '随机截取多少条聊天记录', 'snapshotCount', s.snapshotCount, 3, 20, '条')}
+        ${sliderRowHTML('截取条数', '随机截取多少条聊天记录', 'snapshotCount', s.snapshotCount, 3, SNAPSHOT_MAX_ITEMS, '条')}
       </div>
     </div>
     <div class="panel" id="section-proactive">
@@ -15188,7 +15328,7 @@ function renderProbabilityPage() {
   bindProbSlider('taGiftChance', 'taGiftChanceRange', 'taGiftChanceNum', 0, 100);
   bindProbSlider('autoSnapshotChance', 'autoSnapshotChanceRange', 'autoSnapshotChanceNum', 0, 100);
   bindProbSlider('autoSnapshotInterval', 'autoSnapshotIntervalRange', 'autoSnapshotIntervalNum', 30, 720);
-  bindProbSlider('snapshotCount', 'snapshotCountRange', 'snapshotCountNum', 3, 20);
+  bindProbSlider('snapshotCount', 'snapshotCountRange', 'snapshotCountNum', 3, SNAPSHOT_MAX_ITEMS);
   bindProbSlider('pomodoroSpeakChance', 'pomodoroSpeakChanceRange', 'pomodoroSpeakChanceNum', 0, 100);
   bindProbSlider('spaceLikeChance', 'spaceLikeChanceRange', 'spaceLikeChanceNum', 0, 100);
   bindProbSlider('spaceCommentChance', 'spaceCommentChanceRange', 'spaceCommentChanceNum', 0, 100);

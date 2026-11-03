@@ -1241,6 +1241,10 @@ input[type=range]::-webkit-slider-thumb{
   pointer-events:auto;-webkit-touch-callout:default;touch-callout:default;
   -webkit-user-select:auto;user-select:auto;cursor:default;
 }
+/* 超长留影图（几十上百条）：图片按原比例完整展开，容器可纵向滑动，
+   不再压缩进 72vh 导致内容看不清；短图仍走上面的居中等比例显示 */
+.snap-preview.tall{justify-content:flex-start;overflow-y:auto;}
+.snap-preview.tall .sp-img{max-height:none;width:92vw;max-width:92vw;height:auto;}
 .snap-preview .sp-tip{color:#fff;font-size:13px;line-height:1.6;text-align:center;opacity:.92;pointer-events:none;}
 .snap-preview .sp-close{
   position:absolute;top:calc(12px + env(safe-area-inset-top, 0px));right:12px;
@@ -1746,11 +1750,13 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
 }
 
 /* 留影卡片 */
-.snapshot-card{background:#fff;border-radius:16px;padding:12px 13px;margin-bottom:10px;border:.5px solid rgba(60,60,67,.08);}
+.snapshot-card{background:#fff;border-radius:16px;padding:12px 13px;margin-bottom:10px;border:.5px solid rgba(60,60,67,.08);height:auto;max-height:none;}
 .snap-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;}
 .snap-title{font-size:13px;font-weight:600;color:#3C3C43;}
 .snap-time{font-size:11px;color:#8E8E93;flex-shrink:0;}
-.snap-body{background:#F2F2F7;border-radius:12px;padding:10px 10px 8px;display:flex;flex-direction:column;gap:5px;max-height:230px;overflow:hidden;}
+/* 留影内容区：勾选条数上限提高到 100 条后必须允许自然延伸，
+   原先 max-height:230px + overflow:hidden 会把长留影截断 */
+.snap-body{background:#F2F2F7;border-radius:12px;padding:10px 10px 8px;display:flex;flex-direction:column;gap:5px;height:auto;max-height:none;overflow:visible;}
 .snap-line{display:flex;}
 .snap-line span{max-width:84%;padding:5px 9px;border-radius:12px;font-size:12px;line-height:1.5;background:#fff;color:#1C1C1E;word-break:break-word;}
 .snap-line.me{justify-content:flex-end;}
@@ -3739,3 +3745,68 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
   animation:highlightMsgGlow .8s ease-in-out 2;
   border-radius:8px;
 }
+
+/* ===================== 字卡库：批量管理模式 ===================== */
+/* 复选框注入卡片最左侧；批量模式下隐藏单卡操作区，避免误触编辑/删除 */
+.card-item.batch{position:relative;padding-left:38px;}
+.card-item.batch .card-ops{display:none;}
+.card-check{
+  position:absolute;left:11px;top:13px;
+  width:18px;height:18px;margin:0;
+  accent-color:var(--primary);cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+}
+/* 底部固定操作栏：sticky 吸附滚动容器底部，自带安全区内边距 */
+.card-batch-bar{
+  position:sticky;bottom:0;z-index:50;
+  display:flex;align-items:center;gap:10px;
+  margin:10px -14px -14px;
+  padding:10px 14px calc(10px + var(--safe-bottom));
+  background:rgba(255,255,255,.96);
+  border-top:1px solid var(--line);
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+}
+.card-batch-bar .spacer{flex:1;}
+.card-batch-bar .btn-sm{padding:8px 14px;font-size:13px;}
+.card-batch-bar .batch-del{background:var(--danger);color:#fff;font-weight:600;}
+.card-batch-bar .batch-del:active{opacity:.85;}
+
+/* ===================== 信件：收藏与收藏夹 ===================== */
+/* 列表 Tab：全部信件 / 我的收藏，胶囊样式，选中为主题色 */
+.letter-tabs{display:flex;gap:8px;margin:0 0 10px;}
+.letter-tab{
+  flex:1;padding:9px 0;border-radius:999px;
+  background:#fff;border:1px solid var(--line);
+  font-size:13px;color:var(--sub);text-align:center;
+  transition:background .15s,color .15s,border-color .15s;
+  -webkit-tap-highlight-color:transparent;
+}
+.letter-tab.active{
+  background:var(--primary);border-color:var(--primary);
+  color:#fff;font-weight:600;
+}
+/* 列表项标题里的收藏小星标 */
+.letter-fav-star{color:#f5a623;font-size:13px;}
+/* 详情弹窗：星标按钮贴在「来自 xx · 日期」行右侧 */
+.letter-fav-row{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.letter-fav-btn{
+  width:36px;height:36px;flex-shrink:0;border-radius:50%;
+  display:grid;place-items:center;
+  color:#c6cad2;transition:color .15s,transform .15s;
+  -webkit-tap-highlight-color:transparent;
+}
+.letter-fav-btn:active{transform:scale(.86);}
+.letter-fav-btn.on{color:#f5a623;}
+.letter-fav-btn.on svg{fill:#f5a623;}
+
+/* ===================== 字卡库：批量导入主按钮 ===================== */
+/* 全局主题色底 + 纯白文字（内部 ⬆ 图标为文本字符，随 color 同步变白）+ 圆角阴影，
+   取代原「新增字卡」成为字卡库最醒目的主操作 */
+.btn.card-import-cta{
+  background:var(--primary) !important;
+  color:#fff !important;
+  border-radius:12px;
+  box-shadow:0 6px 16px rgba(var(--primary-rgb),.35);
+  font-weight:600;
+}
+.btn.card-import-cta:active{transform:scale(.97);box-shadow:0 3px 8px rgba(var(--primary-rgb),.3);}
