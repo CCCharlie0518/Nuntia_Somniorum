@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.5.0';
+const APP_VERSION = 'v8.6.0';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -599,6 +599,8 @@ function defaultState() {
       replyDelayMax: 3,
       taRecallChance: 10,
       taQuoteChance: 15,
+      /* TA 发语音概率：命中时把本轮字卡文字转成语音气泡（3~10 秒），点气泡展开文字 */
+      taVoiceChance: 30,
       locationCooldown: 60,
       mergeChance: 50,
       mergeMin: 2,
@@ -964,7 +966,7 @@ function mergeState(saved) {
   if (!Array.isArray(out.pomodoro.records)) out.pomodoro.records = [];
 
   /* 概率参数校正，兼容旧版 / 手工编辑过的备份 */
-  ['replyChance', 'emojiSendChance', 'callChance', 'answerChance', 'spaceLikeChance', 'spaceCommentChance', 'redPacketClaimChance', 'taRedPacketChance', 'taGiftChance', 'autoSnapshotChance', 'pomodoroSpeakChance', 'taRecallChance', 'taQuoteChance'].forEach(k => {
+  ['replyChance', 'emojiSendChance', 'callChance', 'answerChance', 'spaceLikeChance', 'spaceCommentChance', 'redPacketClaimChance', 'taRedPacketChance', 'taGiftChance', 'autoSnapshotChance', 'pomodoroSpeakChance', 'taRecallChance', 'taQuoteChance', 'taVoiceChance'].forEach(k => {
     const v = Number(out.settings[k]);
     out.settings[k] = Number.isFinite(v) ? clamp(v, 0, 100) : d.settings[k];
   });
@@ -1451,6 +1453,9 @@ function mergeState(saved) {
       if (msg.type === 'call' && !msg.call) msg.type = 'text';
       if (msg.type === 'quiz' && !msg.quiz) msg.type = 'text';
       if (msg.type === 'sticker' && !msg.image) msg.type = 'text';
+      /* 语音兼容：缺音频 / 缺文字的脏数据降级为普通文字，避免渲染出空气泡 */
+      if (msg.type === 'voice-user' && !msg.voiceBase64) { msg.type = 'text'; msg.content = msg.content || '[语音]'; }
+      if (msg.type === 'voice-ta' && (!msg.text || !msg.duration)) { msg.type = 'text'; msg.content = msg.text || msg.content || '[语音]'; }
       /* 图片消息兼容：旧记录无 images 视为无图；类型不对的脏数据直接丢弃 */
       if (msg.images !== undefined && !Array.isArray(msg.images)) delete msg.images;
       if (Array.isArray(msg.images)) msg.images = msg.images.filter(x => typeof x === 'string' && x).slice(0, 9);
@@ -2042,6 +2047,7 @@ function previewOf(m, role) {
   if (m.type === 'gift') return '[礼物] ' + (m.giftName || '');
   if (m.type === 'location') return '[定位] ' + (m.name || '');
   if (m.type === 'mood') return '[心情] ' + (m.moodEmoji || '💭') + ' ' + (m.moodName || '');
+  if (m.type === 'voice-user' || m.type === 'voice-ta') return '[语音] ' + Math.max(1, Math.round(Number(m.duration) || 1)) + '"';
   if (m.type === 'readInvite') return '[一起读书] ' + ((m.status || 'pending') === 'accepted' ? '共读邀请已接受' : (m.status === 'rejected' ? '共读邀请已拒绝' : '共读邀请'));
   /* 系统提示等旧存文本中的「TA」按当前梦角名字动态替换显示 */
   if (m.role === 'system') return String(m.content || '').replace(/TA/g, dn);
@@ -2713,14 +2719,24 @@ function bumpChatGen(roleId) {
 
 /* 搜索聊天记录：线条风放大镜图标（菜单项与搜索框内共用） */
 const CHAT_SEARCH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>';
+/* 搜索筛选栏右侧「按日期」：线条风日历图标 */
+const CALENDAR_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="3"/><path d="M3.5 10h17"/><path d="M8 2.8v4M16 2.8v4"/></svg>';
+
+/* 语音：线条风麦克风（输入框录音按钮）/ 线条风喇叭（语音气泡内） */
+const MIC_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><path d="M12 18v3.5M8.5 21.5h7"/></svg>';
+const VOICE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5h3l4-3.2v11.4L7 14.5H4z"/><path d="M14.5 9a4.2 4.2 0 0 1 0 6M17 6.5a7.2 7.2 0 0 1 0 11"/></svg>';
+/* 上滑取消时浮层里替换成的线条风垃圾桶图标 */
+const TRASH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5.2A.2.2 0 0 1 9.2 5h5.6A.2.2 0 0 1 15 5.2V7"/><path d="M6.5 7l.8 12.2A1.8 1.8 0 0 0 9.1 21h5.8a1.8 1.8 0 0 0 1.8-1.8L17.5 7"/><path d="M10 11v6M14 11v6"/></svg>';
 
 function renderChatPage(roleId) {
   const role = roleById(roleId);
   if (!role) { currentRoute = { page: 'messages' }; applyRoute(); return; }
   /* 每次进入聊天页都从「最近 50 条」重新开始：上次展开过的更早消息不延续，
-     避免第二次进入又把几百条历史一次性建出来 */
+     避免第二次进入又把几百条历史一次性建出来；同时退出搜索跳转的局部窗口 */
   chatRenderRole = null;
   chatRenderLimit = CHAT_PAGE_SIZE;
+  chatWinStart = null;
+  chatWinSize = 0;
   applyRoleTheme(role);
   /* 当前梦角显示名：名字为空时兜底「TA」 */
   const dn = String(role.name || '').trim() || 'TA';
@@ -2753,8 +2769,16 @@ function renderChatPage(roleId) {
         <button class="filter-btn active" data-filter="all" type="button">全部</button>
         <button class="filter-btn" data-filter="mine" type="button">我说的</button>
         <button class="filter-btn" data-filter="theirs" type="button">TA说的</button>
+        <div class="date-filter-wrap">
+          <button class="date-btn" id="chatSearchDateBtn" type="button" title="按日期筛选">
+            ${CALENDAR_ICON}<span id="chatSearchDateLabel">日期</span>
+          </button>
+          <!-- 透明覆盖在「日期」按钮上的原生日期控件：点按直接弹出系统日历（iOS/Android/桌面全兼容） -->
+          <input type="date" id="chatSearchDateInput" class="search-date-input" aria-label="选择日期">
+        </div>
+        <button class="date-clear hidden" id="chatSearchDateClear" type="button" title="清除日期" aria-label="清除日期">×</button>
       </div>
-      <div class="csch-results" id="search-results-list"><div class="csch-empty">输入关键词搜索聊天记录</div></div>
+      <div class="csch-results" id="search-results-list"><div class="csch-empty">输入关键词或选择日期开始搜索</div></div>
     </div>
     <div class="chat-scroll" id="chatScroll"><div class="chat-list" id="chatList"></div></div>
     <div class="img-draft-bar" id="imgDraftBar"><div class="img-draft-list" id="imgDraftList"></div></div>
@@ -2780,6 +2804,7 @@ function renderChatPage(roleId) {
     <div class="chat-input" id="chatInputRow">
       <button class="ci-btn" id="btnPlus" title="更多">＋</button>
       <textarea id="chatText" rows="1" placeholder="发消息给 ${esc(dn)}…"></textarea>
+      <button class="ci-ico" id="btnMic" title="录音" aria-label="录音">${MIC_ICON}</button>
       <button class="ci-ico" id="btnSticker" title="表情包" aria-label="表情包">${APP_ICONS.smile}</button>
       <button class="ci-ico" id="btnImage" title="发图片" aria-label="发图片">${APP_ICONS.image}</button>
       <button class="send-btn" id="btnSend">发送</button>
@@ -2795,6 +2820,7 @@ function renderChatPage(roleId) {
   const chatBackBtn = $('#page-chat .chat-nav [data-back]');
   if (chatBackBtn) chatBackBtn.addEventListener('click', () => {
     setChatSelectMode(false);
+    cancelVoiceRecord();   /* 离开聊天页前务必释放麦克风，避免后台持续录音 */
     closeChatPlus();
     closeStickerSheet();
     goBack();
@@ -2850,9 +2876,35 @@ function renderChatPage(roleId) {
     cschInput.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); runChatSearch(roleId, cschInput.value); }
     });
+    /* 点按搜索框 = 重新开始一轮关键词搜索：按需求自动重置日期筛选（日期改为选完关键词再点） */
+    cschInput.addEventListener('pointerdown', () => {
+      if (currentSearchDate) setSearchDate(roleId, '');
+    });
   }
   const cschCancel = $('#chatSearchCancel');
   if (cschCancel) cschCancel.addEventListener('click', () => closeChatSearch());
+  /* 【按日期查找】原生 <input type="date"> 透明覆盖在「日期」按钮上，点按即弹系统日历；
+     选中/清除后立刻重新组合搜索（关键词 + 日期 + 发送者三者同时生效） */
+  const dateInput = $('#chatSearchDateInput');
+  if (dateInput) {
+    const onDateChange = () => setSearchDate(roleId, dateInput.value);
+    dateInput.addEventListener('change', onDateChange);
+    dateInput.addEventListener('input', onDateChange);
+  }
+  /* 支持 showPicker 的浏览器（Chrome / Edge / Firefox）：直接调原生日历，
+     避免桌面端点透明控件只聚焦、不弹日历；Safari 无此 API，交给原生点击行为 */
+  const dateWrap = $('.date-filter-wrap');
+  if (dateWrap) dateWrap.addEventListener('pointerdown', e => {
+    const inp = $('#chatSearchDateInput');
+    if (!inp || typeof inp.showPicker !== 'function') return;
+    try { e.preventDefault(); inp.showPicker(); } catch (err) { /* 交回原生点击 */ }
+  });
+  const dateClear = $('#chatSearchDateClear');
+  if (dateClear) dateClear.addEventListener('click', e => {
+    e.stopPropagation();
+    e.preventDefault();
+    setSearchDate(roleId, '');
+  });
   /* 发送者筛选标签：切换选中态后只对已有全量结果重新过滤，不重新搜索 */
   const cschFilterBtns = $$('.search-filter-bar .filter-btn');
   cschFilterBtns.forEach(btn => btn.addEventListener('click', () => {
@@ -2874,7 +2926,22 @@ function renderChatPage(roleId) {
   });
   /* 右上角电话图标：发起原有「我打给TA」拨号流程 */
   $('#btnCallNav').addEventListener('click', () => startOutgoingCall(roleId));
-  /* 输入框右侧内侧：表情包（弹原有表情面板）与发图片（选择方式） */
+  /* 输入框右侧内侧：录音（麦克风）、表情包（弹原有表情面板）与发图片（选择方式） */
+  /* 麦克风：微信式「长按录音、上滑取消、松手发送」，统一改用 Pointer 事件
+     （PC 鼠标与移动端触摸走同一套逻辑）。pointerup / pointermove 常驻绑在 document 上，
+     再加 setPointerCapture：鼠标移出按钮、甚至移出窗口后再松手，也一定能收到 pointerup。 */
+  const micBtn = $('#btnMic');
+  micBtn.addEventListener('contextmenu', e => e.preventDefault());
+  micBtn.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;   /* 只响应鼠标左键 */
+    e.preventDefault();
+    e.stopPropagation();
+    try { micBtn.setPointerCapture(e.pointerId); } catch (err) { /* 老浏览器忽略 */ }
+    kebab.classList.remove('open');
+    closeChatPlus();
+    closeStickerSheet();
+    beginVoicePress(roleId, e.clientY);
+  });
   $('#btnSticker').addEventListener('click', e => {
     e.stopPropagation();
     kebab.classList.remove('open');
@@ -3155,17 +3222,67 @@ function confirmChatSnapshot(roleId) {
 const CHAT_PAGE_SIZE = 50;
 let chatRenderRole = null;
 let chatRenderLimit = CHAT_PAGE_SIZE;
+/* 搜索跳转专用「局部窗口渲染」：normal 模式只渲染末尾 chatRenderLimit 条；
+   chatWinStart 非 null 时进入窗口模式，只渲染 [chatWinStart, chatWinStart + chatWinSize) 这一段，
+   上限严格控制在 CHAT_JUMP_WINDOW 条，绝不因为跳转就整份历史全渲染。 */
+const CHAT_JUMP_WINDOW = 60;      /* 跳转时一次最多渲染 60 条 */
+const CHAT_JUMP_HALF = 30;        /* 目标消息前后各留 30 条 */
+let chatWinStart = null;          /* null = 末尾分页模式；数字 = 局部窗口起始下标 */
+let chatWinSize = 0;              /* 局部窗口渲染条数（<= CHAT_JUMP_WINDOW + 分页追加） */
+let chatJumpToken = 0;            /* 每次跳转自增，用于作废上一次的延迟对齐 */
 /* 气泡旁 TA 头像的单击/双击定时器（250ms 内无第二次点击算单击） */
 let msgAvatarTapTimer = null;
+
+/* 保证每条聊天消息都有唯一 id：旧数据可能缺 id 或历史导入出现重复 id，
+   重复会让 [data-msg-id] 查到错误气泡，因此这里一次性校验并补全新 id。
+   仅在渲染/搜索前调用，O(n) 且绝大多数情况不会改动，开销可忽略。 */
+function normalizeChatIds(roleId) {
+  const msgs = state.chats && state.chats[roleId];
+  if (!Array.isArray(msgs) || !msgs.length) return;
+  const seen = new Set();
+  let changed = false;
+  for (let i = 0; i < msgs.length; i++) {
+    const m = msgs[i];
+    if (!m) continue;
+    let id = m.id == null ? '' : String(m.id).trim();
+    if (!id) { id = uid(); m.id = id; changed = true; }
+    else {
+      if (typeof m.id !== 'string' || m.id !== id) { m.id = id; changed = true; }
+      if (seen.has(id)) { id = uid(); m.id = id; changed = true; }
+    }
+    seen.add(id);
+  }
+  if (changed) persist();
+}
 
 function loadOlderMessages() {
   const sc = $('#chatScroll');
   const prevTop = sc ? sc.scrollTop : 0;
   const prevHeight = sc ? sc.scrollHeight : 0;
-  chatRenderLimit += CHAT_PAGE_SIZE;
-  renderChatMessages();
+  if (chatWinStart !== null) {
+    /* 窗口模式：向下扩展起点、保持原终点不变，只多渲染一页 */
+    const msgs = chatOf(currentRoute.roleId);
+    const end = Math.min(msgs.length, chatWinStart + chatWinSize);
+    const newStart = Math.max(0, chatWinStart - CHAT_PAGE_SIZE);
+    chatWinStart = newStart;
+    chatWinSize = Math.max(1, end - newStart);
+  } else {
+    chatRenderLimit += CHAT_PAGE_SIZE;
+  }
+  renderChatMessages(true);
   /* 追加的是上方内容：按新增高度补偿滚动位置，视线停在原处 */
   if (sc) sc.scrollTop = prevTop + (sc.scrollHeight - prevHeight);
+}
+
+/* 窗口模式专用：向下（更新方向）多渲染一页；普通末尾模式不需要这个按钮 */
+function loadNewerMessages() {
+  if (chatWinStart === null) return;
+  const sc = $('#chatScroll');
+  const prevTop = sc ? sc.scrollTop : 0;
+  const msgs = chatOf(currentRoute.roleId);
+  chatWinSize = Math.min(msgs.length - chatWinStart, chatWinSize + CHAT_PAGE_SIZE);
+  renderChatMessages(true);
+  if (sc) sc.scrollTop = prevTop;
 }
 
 /* 消息列表事件委托：图片看大图 / 领取红包与礼物 / 头像拍一拍 / 多选勾选 / 查看更早消息。
@@ -3177,6 +3294,7 @@ function ensureChatDelegation(list) {
     const t = e.target;
     const roleId = currentRoute.roleId;
     if (t.closest('#chatMoreBtn')) { loadOlderMessages(); return; }
+    if (t.closest('#chatNewerBtn')) { loadNewerMessages(); return; }
     const rp = t.closest('[data-rpclaim]');
     if (rp) { e.stopPropagation(); claimRedPacket(roleId, rp.dataset.rpclaim); return; }
     const gift = t.closest('[data-giftclaim]');
@@ -3220,13 +3338,13 @@ function ensureChatDelegation(list) {
       return;
     }
     if (chatSelectMode) {
-      const el = t.closest('.msg[data-mid]');
+      const el = t.closest('.msg[data-msg-id]');
       if (!el) return;
       /* 阻止默认行为与冒泡：留影选择模式下整条消息就是勾选区，
          避免冒泡到其它委托分支、也避免任何包裹元素的默认动作引起页面跳动 */
       e.preventDefault();
       e.stopPropagation();
-      const id = el.dataset.mid;
+      const id = el.dataset.msgId;
       const on = !chatSelectedIds.has(id);
       /* 上限保护：放宽到 100 条，超过时拦截并提示（防止极端长图拖垮手机） */
       if (on && chatSelectedIds.size >= SNAPSHOT_MAX_ITEMS) {
@@ -3241,6 +3359,26 @@ function ensureChatDelegation(list) {
       el.classList.toggle('selected', on);
       const chk = $('.sel-check', el);
       if (chk) chk.textContent = on ? '✓' : '';
+      return;
+    }
+    /* 语音交互放在选择模式之后：多选时点语音仍然只是勾选，不会触发播放/展开 */
+    const vUser = t.closest('[data-voiceplay]');
+    if (vUser) {
+      e.stopPropagation();
+      const vm = chatOf(roleId).find(x => x.id === vUser.dataset.voiceplay);
+      if (vm) playVoiceMessage(vm, vUser);
+      return;
+    }
+    const vTa = t.closest('[data-voicetoggle]');
+    if (vTa) {
+      e.stopPropagation();
+      /* TA 语音只切换文字区显示，绝不播放音频 */
+      const box = document.getElementById('voiceText-' + vTa.dataset.voicetoggle);
+      if (box) {
+        box.classList.toggle('hidden');
+        vTa.classList.toggle('text-open', !box.classList.contains('hidden'));
+      }
+      return;
     }
   });
 }
@@ -3249,7 +3387,7 @@ function renderChatIf(roleId) {
   if (currentRoute.page === 'chat' && currentRoute.roleId === roleId) renderChatMessages();
 }
 
-function renderChatMessages() {
+function renderChatMessages(keepScroll) {
   const list = $('#chatList');
   if (!list) return;
   const roleId = currentRoute.roleId;
@@ -3258,10 +3396,27 @@ function renderChatMessages() {
   /* 当前梦角显示名：动态渲染，切换梦角/改名后立即生效 */
   const dn = String(role.name || '').trim() || 'TA';
   const msgs = chatOf(roleId);
-  /* 只渲染最近 50 条：几百上千条一次性建 DOM 是进入聊天页卡顿的主因 */
-  if (chatRenderRole !== roleId) { chatRenderRole = roleId; chatRenderLimit = CHAT_PAGE_SIZE; }
-  const startIdx = Math.max(0, msgs.length - chatRenderLimit);
-  const visible = startIdx > 0 ? msgs.slice(startIdx) : msgs;
+  normalizeChatIds(roleId);
+  /* 只渲染最近 50 条：几百上千条一次性建 DOM 是进入聊天页卡顿的主因；
+     切换梦角时同时退出「搜索跳转的局部窗口」，回到常规末尾分页 */
+  if (chatRenderRole !== roleId) {
+    chatRenderRole = roleId;
+    chatRenderLimit = CHAT_PAGE_SIZE;
+    chatWinStart = null;
+    chatWinSize = 0;
+  }
+  const winMode = chatWinStart !== null;
+  let startIdx, endIdx, visible;
+  if (winMode) {
+    /* 局部窗口模式：只取目标附近的 60 条（由 jumpToChatMessage 设置），绝不全量渲染 */
+    startIdx = clamp(chatWinStart, 0, msgs.length);
+    endIdx = clamp(startIdx + Math.max(1, chatWinSize), startIdx, msgs.length);
+    visible = msgs.slice(startIdx, endIdx);
+  } else {
+    startIdx = Math.max(0, msgs.length - chatRenderLimit);
+    endIdx = msgs.length;
+    visible = startIdx > 0 ? msgs.slice(startIdx) : msgs;
+  }
   let html = '';
   /* 窗口首条的时间分隔用「窗口前一条」的时间做基准，展开时不会多出/漏掉分隔 */
   let lastTs = startIdx > 0 ? msgs[startIdx - 1].ts : 0;
@@ -3283,7 +3438,7 @@ function renderChatMessages() {
 
     if (m.type === 'pat') {
       /* 拍一拍：居中的浅色系统行，谁拍谁、可带单张字卡后缀 */
-      html += `<div class="msg pat-msg-row" data-mid="${m.id}">
+      html += `<div class="msg pat-msg-row" data-msg-id="${esc(String(m.id))}">
         <div class="msg-body" style="align-items:center;max-width:88%">
           <div class="pat-msg">${esc(patTextOf(m, dn))}</div>
           <div style="font-size:10px;opacity:.6;margin-top:2px">${fmtMsgTime(m.ts)}</div>
@@ -3296,7 +3451,7 @@ function renderChatMessages() {
       const isCall = m.type === 'call' && m.call;
       /* 旧存的系统提示文本若含「TA」，按当前梦角名字动态替换显示 */
       const sysText = isCall ? callSummary(m.call) : String(m.content || '').replace(/TA/g, dn);
-      html += `<div class="msg" data-mid="${m.id}" style="justify-content:center;width:100%">
+      html += `<div class="msg" data-msg-id="${esc(String(m.id))}" style="justify-content:center;width:100%">
         <div class="msg-body" style="align-items:center;max-width:88%">
           <div class="bubble ${isCall ? 'call-bubble' : ''}" style="background:var(--primary-soft);color:var(--primary-dark);border-radius:12px;font-size:13px;text-align:center">
             <div class="${isCall ? 'cl-t' : ''}">${isCall ? '📞 ' : ''}${esc(sysText)}</div>
@@ -3407,6 +3562,28 @@ function renderChatMessages() {
           <div class="loc-name">${esc(m.emoji || '📍')} ${esc(m.name || '未知地点')}</div>
         </div>
       </div>`;
+    } else if (m.type === 'voice-user') {
+      /* 我方语音：整块仍包在标准 .bubble 里，完全继承主题色与自定义气泡样式；
+         宽度随时长增长（每 1 秒 +6px），封顶 180px；点击播放（全局同一时间仅一条） */
+      const dur = clamp(Math.round(Number(m.duration) || 1), 1, 60);
+      const w = clamp(66 + dur * 6, 72, 180);
+      inner = `<div class="bubble voice-bubble voice-mine" data-voiceplay="${m.id}" style="min-width:${w}px">
+        ${quoteHTML}
+        <span class="vio">${VOICE_ICON}</span>
+        <span class="vtxt">${dur}"</span>
+      </div>`;
+    } else if (m.type === 'voice-ta') {
+      /* TA 语音：气泡下方附带默认隐藏的文字区，点气泡只展开/收起文字，不播放音频 */
+      const dur = clamp(Math.round(Number(m.duration) || 3), 1, 60);
+      const w = clamp(66 + dur * 6, 72, 180);
+      inner = `<div class="voice-wrap">
+        <div class="bubble voice-bubble voice-ta" data-voicetoggle="${m.id}" style="min-width:${w}px">
+          ${quoteHTML}
+          <span class="vio">${VOICE_ICON}</span>
+          <span class="vtxt">${dur}"</span>
+        </div>
+        <div class="voice-text hidden" id="voiceText-${m.id}">${esc(m.text || m.content || '')}</div>
+      </div>`;
     } else {
       /* 普通文字 / 图文混合消息：images 数组非空时图片在上、文字在下 */
       const imgs = Array.isArray(m.images) ? m.images.filter(x => typeof x === 'string' && x) : [];
@@ -3427,7 +3604,7 @@ function renderChatMessages() {
       ? `<span class="read-mark">已读${m.readNote ? ' · ' + esc(m.readNote) : ''}</span>` : '';
     const checked = chatSelectMode && chatSelectedIds.has(m.id);
     html += `
-      <div class="msg ${mine ? 'mine' : 'theirs'}${checked ? ' selected' : ''}" data-mid="${m.id}">
+      <div class="msg ${mine ? 'mine' : 'theirs'}${checked ? ' selected' : ''}" data-msg-id="${esc(String(m.id))}">
         ${chatSelectMode ? `<div class="sel-check">${checked ? '✓' : ''}</div>` : ''}
         ${mine ? avatarHTML(state.my.avatar, 34) : `<span class="ava-pat msg-ta-avatar" data-avapat="${m.id}">${roleAvatarHTML(role, 34)}</span>`}
         <div class="msg-body">
@@ -3436,6 +3613,12 @@ function renderChatMessages() {
         </div>
       </div>`;
   });
+
+  /* 局部窗口模式：下方还剩更新的消息时，给出「查看更新的消息」入口，
+     让用户能从这里一页页往下看，而不是被迫整份历史全渲染 */
+  if (winMode && endIdx < msgs.length) {
+    html += `<div class="chat-more"><button id="chatNewerBtn" type="button">查看更新的消息（还有 ${msgs.length - endIdx} 条）</button></div>`;
+  }
 
   if (!msgs.length && !typingMap.get(roleId)) {
     html += `<div class="chat-empty">还没有聊天记录<br>说点什么，${esc(dn)}会用字卡回应你</div>`;
@@ -3464,12 +3647,15 @@ function renderChatMessages() {
   /* 长按（或右键）气泡弹出操作菜单：删除 / 撤回（仅自己）/ 引用；同样只绑定一次 */
   bindBubbleLongPress(list);
   const sc = $('#chatScroll');
-  if (sc) {
+  /* 窗口模式或 keepScroll（搜索跳转的局部渲染 / 加载更多）一律不强制贴底：
+     贴底会把刚跳到的旧消息又甩回最新消息处 */
+  if (sc && !keepScroll && !winMode) {
     sc.scrollTop = sc.scrollHeight;
     /* 图片 / 字体晚加载会撑高消息区：原本贴着底部时补一次贴底，
        避免进入聊天页停在「最新消息上方」；用户已上滑时不动 */
     setTimeout(() => {
       if (currentRoute.page !== 'chat' || currentRoute.roleId !== roleId) return;
+      if (chatWinStart !== null) return;
       if (sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 120) sc.scrollTop = sc.scrollHeight;
     }, 80);
   }
@@ -3484,10 +3670,46 @@ function renderChatMessages() {
 let rawSearchResults = [];          /* 关键词全量命中（未按发送者筛选），切换筛选时只过滤这个数组 */
 let currentSearchResults = [];      /* 当前筛选后的结果（分页渲染的数据源） */
 let currentSearchKeyword = '';      /* 当前关键词（结果高亮与加载更多时复用） */
+let currentSearchDate = '';         /* 当前日期筛选：'YYYY-MM-DD'（本地时区），空串 = 不限日期 */
 let currentSearchFilter = 'all';    /* 发送者筛选：'all' | 'mine' | 'theirs' */
 let searchRenderLimit = 20;         /* 当前已渲染到 DOM 的条数 */
 const SEARCH_PAGE_SIZE = 20;        /* 每页渲染条数 / 加载更多步长 */
 let searchDebounceTimer = 0;        /* 输入防抖计时器 */
+
+/* 把时间戳格式化成「本地时区」的 YYYY-MM-DD。
+   注意：绝不能用 toISOString()（那是 UTC，东八区早上 8 点前会算成前一天），
+   必须用 getFullYear / getMonth / getDate 直接取本地日历字段。 */
+function dayKeyOf(ts) {
+  const d = new Date(Number(ts) || 0);
+  if (isNaN(d.getTime())) return '';
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+}
+
+/* 同步「按日期」按钮的外观：选中时高亮（.active）并显示 MM-DD，同时露出小 × 清除键 */
+function syncSearchDateUI() {
+  const on = !!currentSearchDate;
+  const btn = $('#chatSearchDateBtn');
+  if (btn) {
+    btn.classList.toggle('active', on);
+    btn.title = on ? '按日期筛选：' + currentSearchDate : '按日期筛选';
+  }
+  const label = $('#chatSearchDateLabel');
+  if (label) label.textContent = on ? currentSearchDate.slice(5) : '日期';
+  const clearBtn = $('#chatSearchDateClear');
+  if (clearBtn) clearBtn.classList.toggle('hidden', !on);
+  const inp = $('#chatSearchDateInput');
+  if (inp) {
+    inp.value = on ? currentSearchDate : '';
+  }
+}
+
+/* 设置/清除日期筛选：更新 UI 后立刻用「当前关键词 + 新日期」重新组合搜索 */
+function setSearchDate(roleId, dateRaw) {
+  currentSearchDate = /^\d{4}-\d{2}-\d{2}$/.test(String(dateRaw || '')) ? String(dateRaw) : '';
+  syncSearchDateUI();
+  const inp = $('#chatSearchInput');
+  runChatSearch(roleId, inp ? inp.value : currentSearchKeyword);
+}
 
 /* 输入防抖：停止输入 300ms 后才真正执行搜索，避免长记录逐字全量匹配造成卡顿 */
 function scheduleChatSearch(roleId, kw) {
@@ -3495,11 +3717,12 @@ function scheduleChatSearch(roleId, kw) {
   searchDebounceTimer = setTimeout(() => runChatSearch(roleId, kw), 300);
 }
 
-/* 全量搜索：一次性找出所有匹配消息存入 rawSearchResults（不截断），再按筛选标签出结果 */
+/* 全量搜索：找出所有同时满足「关键词（可为空）+ 日期（可为空）」的消息存入 rawSearchResults，
+   再按发送者标签出结果；两个条件都为空时结果为空（展示引导空态） */
 function runChatSearch(roleId, kwRaw) {
   clearTimeout(searchDebounceTimer);
   currentSearchKeyword = String(kwRaw || '').trim();
-  rawSearchResults = currentSearchKeyword ? chatSearchMatches(roleId, currentSearchKeyword) : [];
+  rawSearchResults = chatSearchMatches(roleId, currentSearchKeyword, currentSearchDate);
   applySearchFilter(roleId);
 }
 
@@ -3523,11 +3746,13 @@ function resetSearchFilterUI(layer) {
 function openChatSearch(roleId) {
   const layer = $('#chat-search-layer');
   if (!layer) return;
-  /* 重置上一轮搜索状态（含筛选）后再渲染空态 */
+  /* 重置上一轮搜索状态（含筛选与日期）后再渲染空态 */
   currentSearchKeyword = '';
+  currentSearchDate = '';
   rawSearchResults = [];
   currentSearchResults = [];
   resetSearchFilterUI(layer);
+  syncSearchDateUI();
   searchRenderLimit = SEARCH_PAGE_SIZE;
   renderChatSearchResults(roleId);
   layer.classList.add('open');
@@ -3544,24 +3769,35 @@ function closeChatSearch() {
   const input = $('#chatSearchInput');
   if (input) { input.value = ''; input.blur(); }
   currentSearchKeyword = '';
+  currentSearchDate = '';
   rawSearchResults = [];
   currentSearchResults = [];
   resetSearchFilterUI(layer);
+  syncSearchDateUI();
   searchRenderLimit = SEARCH_PAGE_SIZE;
   renderChatSearchResults(currentRoute.roleId);
 }
 
-/* 只匹配「纯文本可检索」的消息：text / content 字段非空；
-   图片、表情包、定位、转账、礼物、问卷、共读、通话、拍一拍等卡片类消息没有文本字段，天然被过滤 */
-function chatSearchMatches(roleId, kwRaw) {
+/* 关键词 + 日期 的组合匹配：
+   1) 关键词非空 → 必须有文本且包含关键词（图片/表情/语音等无文本消息自然排除）；
+      关键词为空 → 忽略关键词条件（此时按日期可以搜到当天的任意类型消息）。
+   2) 日期非空 → 消息时间戳的「本地日历日」必须与选中日期完全相等；为空则不限时间。
+   两个条件都为空 → 返回空数组（由渲染层给出「输入关键词或选择日期开始搜索」空态）。 */
+function chatSearchMatches(roleId, kwRaw, dateRaw) {
   const kw = String(kwRaw || '').trim().toLowerCase();
-  if (!kw) return [];
+  const date = String(dateRaw || '').trim();
+  if (!kw && !date) return [];
+  normalizeChatIds(roleId);   /* 保证结果里的 id 与 DOM 上的 data-msg-id 一一对应 */
   return chatOf(roleId).filter(m => {
     if (!m || m.recalled) return false;
-    const text = typeof m.content === 'string' ? m.content
-      : (typeof m.text === 'string' ? m.text : '');
-    if (!text.trim()) return false;
-    return text.toLowerCase().includes(kw);
+    if (kw) {
+      const text = typeof m.content === 'string' ? m.content
+        : (typeof m.text === 'string' ? m.text : '');
+      if (!text.trim()) return false;
+      if (!text.toLowerCase().includes(kw)) return false;
+    }
+    if (date && dayKeyOf(m.ts) !== date) return false;
+    return true;
   });
 }
 
@@ -3587,8 +3823,10 @@ function renderChatSearchResults(roleId) {
   const box = $('#search-results-list');
   if (!box) return;
   const kw = currentSearchKeyword;
-  if (!kw) {
-    box.innerHTML = '<div class="csch-empty">输入关键词搜索聊天记录</div>';
+  const dateOn = !!currentSearchDate;
+  /* 关键词与日期都为空：还没开始搜，给引导文案 */
+  if (!kw && !dateOn) {
+    box.innerHTML = '<div class="csch-empty">输入关键词或选择日期开始搜索</div>';
     return;
   }
   const total = currentSearchResults.length;
@@ -3598,23 +3836,35 @@ function renderChatSearchResults(roleId) {
   }
   const shown = Math.min(searchRenderLimit, total);
   const kwL = kw.toLowerCase();
+  const role = roleById(roleId);
   /* 发送者标识：直接复用全局归一化函数 wcMsgSender（兼容 role/sender/who/isUser 多种落库写法），
      返回 'user'（我）或 'ta'（梦角）；数据库无论用哪种字段都能正确区分 */
-  const roleName = esc((roleById(roleId) || {}).name || 'TA');
+  const roleName = esc((role || {}).name || 'TA');
   let html = currentSearchResults.slice(0, shown).map(m => {
-    const text = String(typeof m.content === 'string' ? m.content : m.text || '');
-    /* 以首个命中点为中心截取片段，避免超长消息撑爆结果行 */
-    const idx = text.toLowerCase().indexOf(kwL);
-    const from = Math.max(0, idx - 12);
-    const to = Math.min(text.length, idx + kw.length + 24);
-    const raw = (from > 0 ? '…' : '') + text.slice(from, to) + (to < text.length ? '…' : '');
+    let text = String(typeof m.content === 'string' ? m.content : m.text || '');
+    /* 仅按日期搜索时可能命中图片/语音/转账等无文本消息：退回统一摘要（[图片]/[语音]…） */
+    if (!text.trim()) text = previewOf(m, role);
+    let snippet;
+    if (kwL) {
+      /* 以首个命中点为中心截取片段，避免超长消息撑爆结果行 */
+      const idx = text.toLowerCase().indexOf(kwL);
+      const from = Math.max(0, idx - 12);
+      const to = Math.min(text.length, idx + kw.length + 24);
+      const raw = (from > 0 ? '…' : '') + text.slice(from, to) + (to < text.length ? '…' : '');
+      snippet = markKeyword(esc(raw), kw);
+    } else {
+      /* 无关键词：取开头一段作为摘要，不做高亮 */
+      snippet = esc(text.length > 40 ? text.slice(0, 40) + '…' : text);
+    }
     const isMine = wcMsgSender(m) === 'user';
     const senderTag = isMine
       ? '<span class="csch-sender mine">我：</span>'
       : `<span class="csch-sender ta">${roleName}：</span>`;
-    return `<div class="csch-item" data-jumpmid="${m.id}">
-      <div class="csch-item-text">${senderTag}${markKeyword(esc(raw), kw)}</div>
-      <div class="csch-item-time">${fmtMsgTime(m.ts)}</div>
+    /* 有时间筛选时，同一天的日期没有意义，只显示时分；否则显示完整时间 */
+    const timeText = dateOn ? fmtClock(m.ts) : fmtMsgTime(m.ts);
+    return `<div class="csch-item" data-jumpmid="${esc(String(m.id))}">
+      <div class="csch-item-text">${senderTag}${snippet}</div>
+      <div class="csch-item-time">${timeText}</div>
     </div>`;
   }).join('');
   if (total > shown) {
@@ -3623,23 +3873,60 @@ function renderChatSearchResults(roleId) {
   box.innerHTML = html;
 }
 
-/* 点击结果：关层 → 确保消息已渲染（分页窗口不够就先扩大）→ 平滑滚动居中 → 高亮 2 秒 */
+/* 属性选择器里的 id 转义（id 通常是小写字母数字，这里兜底老数据里的特殊字符） */
+function cssAttrValue(v) {
+  const s = String(v == null ? '' : v);
+  return (window.CSS && typeof CSS.escape === 'function') ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&');
+}
+
+/* 点击搜索结果：关层 → 已在 DOM 就直接滚；不在才做「目标前后各 30 条、共最多 60 条」的局部渲染。
+   核心要求：绝不为跳转做全量渲染，点击后立刻完成定位，不卡顿。 */
 function jumpToChatMessage(roleId, mid) {
   closeChatSearch();
+  const list = $('#chatList');
   const msgs = chatOf(roleId);
   const idx = msgs.findIndex(m => m.id === mid);
-  if (idx < 0) return;
-  const startIdx = Math.max(0, msgs.length - chatRenderLimit);
-  if (idx < startIdx) {
-    /* 目标消息在当前渲染窗口之前：一次扩窗到能覆盖它（等同连点多次「查看更早的消息」） */
-    chatRenderLimit = msgs.length - idx;
-    renderChatMessages();
+  if (!list || idx < 0) return;
+
+  const token = ++chatJumpToken;                 /* 新的跳转作废上一次的延迟对齐 */
+  const sel = '.msg[data-msg-id="' + cssAttrValue(mid) + '"]';
+  let el = list.querySelector(sel);
+
+  if (!el) {
+    /* 目标不在当前 DOM（列表只渲染了最近一段）：以它为中心开一个 60 条窗口 */
+    let start = Math.max(0, idx - CHAT_JUMP_HALF);
+    let end = Math.min(msgs.length, start + CHAT_JUMP_WINDOW);
+    if (end - start < CHAT_JUMP_WINDOW) start = Math.max(0, end - CHAT_JUMP_WINDOW);
+    chatWinStart = start;
+    chatWinSize = Math.max(1, end - start);
+    renderChatMessages(true);                    /* 一次性拼 HTML 替换，不贴底、不整份渲染 */
+    el = list.querySelector(sel);
   }
-  const el = $('#chatList .msg[data-mid="' + mid + '"]');
   if (!el) return;
-  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  el.classList.add('highlight-msg');
-  setTimeout(() => el.classList.remove('highlight-msg'), 2000);
+
+  const sc = $('#chatScroll');
+  const reveal = smooth => {
+    if (token !== chatJumpToken) return;
+    if (currentRoute.page !== 'chat' || currentRoute.roleId !== roleId) return;
+    const node = list.querySelector(sel);
+    if (!node) return;
+    node.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'center' });
+    node.classList.add('highlight-msg');
+    setTimeout(() => node.classList.remove('highlight-msg'), 2000);
+  };
+  /* 双 rAF：等局部渲染这一帧真正布局完成再滚（比定时器更贴合渲染节奏） */
+  requestAnimationFrame(() => requestAnimationFrame(() => reveal(true)));
+  /* 兜底对齐：大图 Base64 / 自定义字体晚到会撑高布局，
+     若目标已被挤出视口再补对齐一次；用户自己滚动过则不再打扰 */
+  setTimeout(() => {
+    if (token !== chatJumpToken) return;
+    if (currentRoute.page !== 'chat' || currentRoute.roleId !== roleId) return;
+    const node = list.querySelector(sel);
+    if (!node || !sc) return;
+    const nb = node.getBoundingClientRect();
+    const sb = sc.getBoundingClientRect();
+    if (nb.top < sb.top + 24 || nb.bottom > sb.bottom - 24) reveal(false);
+  }, 320);
 }
 
 function bindBubbleLongPress(list) {
@@ -3658,7 +3945,7 @@ function bindBubbleLongPress(list) {
     pressEl.classList.add('bubble-press');
     timer = setTimeout(() => {
       timer = null;
-      const id = el.dataset.mid;
+      const id = el.dataset.msgId;
       if (pressEl) pressEl.classList.remove('bubble-press');
       pressEl = null;
       if (id) openMessageActions(currentRoute.roleId, id);
@@ -3668,7 +3955,7 @@ function bindBubbleLongPress(list) {
   /* 用 addEventListener + {passive:false} 才能保证 preventDefault 生效，
      彻底阻断 iOS 长按弹系统「复制/全选/删除」菜单；自定义菜单照常触发 */
   list.addEventListener('pointerdown', e => {
-    const el = e.target.closest('.msg[data-mid]');
+    const el = e.target.closest('.msg[data-msg-id]');
     if (!el || e.target.closest('.rp-claim')) return;
     e.preventDefault();
     clear();
@@ -3683,13 +3970,13 @@ function bindBubbleLongPress(list) {
   list.addEventListener('pointerleave', clear);
   /* 桌面右键同样唤起菜单，并屏蔽浏览器默认菜单 */
   list.addEventListener('contextmenu', e => {
-    const el = e.target.closest('.msg[data-mid]');
+    const el = e.target.closest('.msg[data-msg-id]');
     if (!el) return;
     e.preventDefault();
     e.stopPropagation();
     /* 触屏长按已由 pointer 定时器唤起菜单，这里避免短时间内重复弹一次 */
     if (Date.now() - bubbleMenuAt < 400) return;
-    const id = el.dataset.mid;
+    const id = el.dataset.msgId;
     if (id) openMessageActions(currentRoute.roleId, id);
   });
 }
@@ -3836,6 +4123,303 @@ function pickChatImages(roleId, capture) {
   input.click();
 }
 
+/* ===================== 语音消息：长按录音 / 播放 =====================
+ * 交互：按住麦克风开始录音 → 上滑超过 50px 进入取消态 → 松手：正常发送 / 取消丢弃；
+ *      时长不足 1 秒按「说话时间太短」丢弃；最长 60 秒自动结束并发送。
+ *      Blob → Base64（dataURL）存进聊天消息，兼容 iOS（优先 audio/mp4，其次 webm/opus）。
+ * 播放：全局只有一个 Audio 实例，同一时间只播一条；再点同一条即停止。
+ * ========================================================= */
+let voiceRec = null;              /* { roleId, recorder, stream, chunks, startedAt, timer } */
+let voiceStarting = false;        /* getUserMedia 等待授权中：防止重复申请麦克风 */
+let voiceStartToken = 0;          /* 授权期间用户取消 / 离开：令牌变化则丢弃这次申请 */
+let voiceAudioEl = null;          /* 当前播放中的 Audio */
+let voicePlayingBubble = null;    /* 正在播放的气泡 DOM */
+
+/* 长按手势状态（voicePress.active 即全局录音标记 isRecording） */
+let voicePress = { active: false, startY: 0, cancel: false, roleId: null };
+let voiceOverlayTimer = null;
+const VOICE_CANCEL_DIST = 50;     /* 上滑超过 50px 判定取消 */
+
+/* 全屏录音浮层：懒创建到 body 末尾（index.html 无需预置节点） */
+function ensureVoiceOverlay() {
+  let ov = document.getElementById('voice-recording-overlay');
+  if (ov) return ov;
+  ov = document.createElement('div');
+  ov.id = 'voice-recording-overlay';
+  ov.className = 'hidden';
+  ov.innerHTML = `
+    <div class="vro-card">
+      <div class="vro-icon" id="vroIcon">${MIC_ICON}</div>
+      <div class="vro-wave"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="vro-time" id="vroTime">00:00</div>
+      <div class="vro-tip" id="vroTip">手指松开，发送</div>
+    </div>`;
+  document.body.appendChild(ov);
+  return ov;
+}
+
+function fmtVoiceTime(ms) {
+  const sec = Math.max(0, Math.floor(ms / 1000));
+  return pad2(Math.floor(sec / 60)) + ':' + pad2(sec % 60);
+}
+
+function showVoiceOverlay(on) {
+  const ov = ensureVoiceOverlay();
+  if (on) {
+    ov.classList.remove('hidden', 'cancel');
+    updateVoiceOverlay(false);
+    const t = document.getElementById('vroTime');
+    if (t) t.textContent = '00:00';
+    if (!voiceOverlayTimer) {
+      voiceOverlayTimer = setInterval(() => {
+        const t2 = document.getElementById('vroTime');
+        if (t2) t2.textContent = fmtVoiceTime(voiceRec ? Date.now() - voiceRec.startedAt : 0);
+      }, 200);
+    }
+  } else {
+    ov.classList.add('hidden');
+    if (voiceOverlayTimer) { clearInterval(voiceOverlayTimer); voiceOverlayTimer = null; }
+  }
+}
+
+function updateVoiceOverlay(cancel) {
+  const ov = document.getElementById('voice-recording-overlay');
+  if (!ov) return;
+  ov.classList.toggle('cancel', !!cancel);
+  const tip = document.getElementById('vroTip');
+  if (tip) tip.textContent = cancel ? '松开手指，取消发送' : '手指松开，发送';
+  const icon = document.getElementById('vroIcon');
+  if (icon) icon.innerHTML = cancel ? TRASH_ICON : MIC_ICON;
+}
+
+/* pointermove / pointerup 常驻绑定在 document 上：
+   只有 voicePress.active === true（即按下了麦克风）时才响应，
+   因此鼠标在按钮外、甚至窗口外松手也能立刻结束录音，且不影响页面其它点击。
+   录音期间的页面滚动由 #btnMic 的 touch-action:none 与浮层的 touch-action:none 共同锁死。 */
+document.addEventListener('pointermove', e => { moveVoicePress(e.clientY); }, { passive: true });
+document.addEventListener('pointerup', () => { endVoicePress(false); });
+document.addEventListener('pointercancel', () => { endVoicePress(true); });
+
+/* 兼容旧调用点：pointer 监听常驻，不需要增删，仅清掉手势标记即可 */
+function detachVoiceGestureDocs() { voicePress.active = false; }
+
+function beginVoicePress(roleId, startY) {
+  if (voicePress.active) return;
+  voicePress = { active: true, startY: Number(startY) || 0, cancel: false, roleId };
+  showVoiceOverlay(true);
+  startVoiceRecord(roleId);
+}
+
+function moveVoicePress(clientY) {
+  if (!voicePress.active) return;
+  const cancel = (voicePress.startY - Number(clientY)) > VOICE_CANCEL_DIST;
+  if (cancel === voicePress.cancel) return;
+  voicePress.cancel = cancel;
+  updateVoiceOverlay(cancel);
+  if (cancel && navigator.vibrate) { try { navigator.vibrate(15); } catch (e) { /* 忽略 */ } }
+}
+
+/* 松手统一收尾：正常发送 / 上滑取消 / 太短丢弃 / 权限未就绪则中止 */
+function endVoicePress(forceCancel) {
+  if (!voicePress.active) return;
+  const cancel = voicePress.cancel || !!forceCancel;
+  voicePress.active = false;
+  detachVoiceGestureDocs();
+  showVoiceOverlay(false);
+  if (!voiceRec) {
+    /* 麦克风权限还没授权完用户就松手：作废这次申请 */
+    cancelVoiceRecord();
+    return;
+  }
+  const duration = Math.round((Date.now() - voiceRec.startedAt) / 1000);
+  if (duration < 1) { stopVoiceRecord(false); showToast('说话时间太短'); return; }
+  if (cancel) { stopVoiceRecord(false); showToast('已取消发送'); return; }
+  stopVoiceRecord(true);
+}
+
+/* 异常中止（授权失败 / 录音中断）：立刻关闭浮层并释放麦克风 */
+function abortVoiceGesture() {
+  voicePress.active = false;
+  detachVoiceGestureDocs();
+  showVoiceOverlay(false);
+  cancelVoiceRecord();
+}
+
+function blobToDataURL(blob) {
+  return new Promise(resolve => {
+    try {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ''));
+      r.onerror = () => resolve('');
+      r.readAsDataURL(blob);
+    } catch (e) { resolve(''); }
+  });
+}
+
+function setVoiceRecordingUI(on) {
+  const btn = $('#btnMic');
+  if (btn) {
+    btn.classList.toggle('recording', on);
+    btn.title = on ? '停止录音' : '录音';
+  }
+  const ta = $('#chatText');
+  if (ta) {
+    if (on) {
+      /* 占位符改成「正在录音...」，结束后原样恢复 */
+      ta.dataset.phRestore = ta.placeholder;
+      ta.placeholder = '正在录音...';
+    } else if (ta.dataset.phRestore) {
+      ta.placeholder = ta.dataset.phRestore;
+      delete ta.dataset.phRestore;
+    }
+  }
+}
+
+async function startVoiceRecord(roleId) {
+  if (voiceStarting) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+    showToast('当前浏览器不支持录音，请用 Safari / Chrome 打开');
+    return;
+  }
+  const token = ++voiceStartToken;
+  voiceStarting = true;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    /* 授权期间已取消（切页 / 返回）：立刻关掉刚拿到的麦克风流 */
+    if (token !== voiceStartToken) {
+      try { stream.getTracks().forEach(tk => tk.stop()); } catch (e) { /* 忽略 */ }
+      return;
+    }
+    /* iOS Safari 只认 audio/mp4；Chrome / Android 认 webm-opus；都不支持时交给浏览器默认值 */
+    const prefers = ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
+    let mime = '';
+    for (let i = 0; i < prefers.length; i++) {
+      try {
+        if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(prefers[i])) { mime = prefers[i]; break; }
+      } catch (e) { /* 忽略单条探测失败 */ }
+    }
+    let recorder;
+    try { recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream); }
+    catch (e) { recorder = new MediaRecorder(stream); }
+    const chunks = [];
+    recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    /* 中途接电话 / 系统打断：立刻停录并关闭浮层，绝不留下悬挂的录音态 */
+    recorder.onerror = () => { showToast('录音已中断'); abortVoiceGesture(); };
+    const startedAt = Date.now();
+    /* 60 秒硬上限：到点自动结束并发送（同时收起浮层与手势监听） */
+    const timer = setTimeout(() => {
+      if (voiceRec && voiceRec.recorder === recorder) {
+        voicePress.active = false;
+        detachVoiceGestureDocs();
+        showVoiceOverlay(false);
+        stopVoiceRecord(true);
+      }
+    }, 60000);
+    voiceRec = { roleId, recorder, stream, chunks, startedAt, timer };
+    recorder.start();
+    voiceStarting = false;
+    /* 授权期间用户已松手：不再进入录音态，直接释放麦克风流 */
+    if (!voicePress.active) { stopVoiceRecord(false); return; }
+    setVoiceRecordingUI(true);
+  } catch (err) {
+    voiceStarting = false;
+    abortVoiceGesture();
+    showToast('无法访问麦克风，请在系统设置里允许录音权限');
+  }
+}
+
+function stopVoiceRecord(send) {
+  const rec = voiceRec;
+  if (!rec) return;
+  voiceRec = null;
+  clearTimeout(rec.timer);
+  setVoiceRecordingUI(false);
+
+  /* 【时序核心】这里只「发起停止」，绝不读数据。
+     MediaRecorder.stop() 是异步的：最后一段音频要等 ondataavailable 触发后才进 rec.chunks，
+     onstop 又在其后。若在 pointerup 里直接 new Blob(rec.chunks)，大概率 chunks 为空、
+     blob.size === 0，于是「松手后无法发送」。
+     所以取数据 → Blob → Base64 → sendUserMessage 全部收敛到 finish()，只由 onstop 调用。 */
+  let done = false;                       /* 幂等：onstop 与兜底超时只允许跑一次 */
+  const finish = async () => {
+    if (done) return;
+    done = true;
+    try { rec.stream.getTracks().forEach(tk => tk.stop()); } catch (e) { /* 忽略 */ }
+    if (!send) return;
+    const duration = clamp(Math.round((rec.stoppedAt - rec.startedAt) / 1000), 1, 60);
+    const blob = new Blob(rec.chunks, { type: (rec.recorder.mimeType || 'audio/webm').split(';')[0] });
+    if (!blob.size) { showToast('没有录到声音，请重试'); return; }
+    const dataUrl = await blobToDataURL(blob);
+    if (!dataUrl) { showToast('语音保存失败，请重试'); return; }
+    sendUserMessage(rec.roleId, { type: 'voice-user', voiceBase64: dataUrl, duration });
+  };
+
+  rec.stoppedAt = Date.now();
+  try {
+    if (rec.recorder.state !== 'inactive') {
+      rec.recorder.onstop = () => { finish(); };
+      rec.recorder.stop();
+      /* 兜底：极少数情况下 onstop 不回调（被系统打断 / 浏览器异常），1.5s 后强制收尾，
+         避免录音浮层已关闭却静默丢掉这条语音。正常情况下 onstop 早已先触发，此回调空转。 */
+      setTimeout(finish, 1500);
+      return;
+    }
+  } catch (e) { /* 已经停了 */ }
+  finish();
+}
+
+/* 放弃本次录音：释放麦克风、不发送（离开聊天页 / 异常中断时调用） */
+function cancelVoiceRecord() {
+  voiceStartToken++;              /* 让还没返回的 getUserMedia 结果作废 */
+  voiceStarting = false;
+  const rec = voiceRec;
+  if (rec) {
+    voiceRec = null;
+    clearTimeout(rec.timer);
+    try { rec.recorder.onstop = null; if (rec.recorder.state !== 'inactive') rec.recorder.stop(); } catch (e) { /* 忽略 */ }
+    try { rec.stream.getTracks().forEach(tk => tk.stop()); } catch (e) { /* 忽略 */ }
+    setVoiceRecordingUI(false);
+  }
+  /* 手势残留一并清掉：浮层隐藏、文档级监听移除，页面恢复可滚动 */
+  voicePress.active = false;
+  detachVoiceGestureDocs();
+  showVoiceOverlay(false);
+  stopVoicePlayback();
+}
+
+function stopVoicePlayback() {
+  if (voiceAudioEl) {
+    try { voiceAudioEl.pause(); } catch (e) { /* 忽略 */ }
+    voiceAudioEl = null;
+  }
+  if (voicePlayingBubble) {
+    voicePlayingBubble.classList.remove('playing');
+    voicePlayingBubble = null;
+  }
+}
+
+function playVoiceMessage(msg, el) {
+  if (!msg || !msg.voiceBase64) { showToast('这条语音已失效'); return; }
+  const same = voicePlayingBubble === el && voiceAudioEl && !voiceAudioEl.paused;
+  stopVoicePlayback();
+  if (same) return;   /* 再点同一条气泡 = 停止播放 */
+  try {
+    const audio = new Audio(msg.voiceBase64);
+    voiceAudioEl = audio;
+    voicePlayingBubble = el || null;
+    if (el) el.classList.add('playing');
+    audio.onended = () => stopVoicePlayback();
+    audio.onerror = () => { stopVoicePlayback(); showToast('语音播放失败'); };
+    const p = audio.play();
+    if (p && typeof p.catch === 'function') {
+      p.catch(() => { stopVoicePlayback(); showToast('播放被系统拦截，请再点一次'); });
+    }
+  } catch (e) {
+    stopVoicePlayback();
+    showToast('语音播放失败');
+  }
+}
+
 function sendChatText(roleId) {
   const ta = $('#chatText');
   if (!ta) return;
@@ -3907,7 +4491,7 @@ function userMsgHTML(m) {
   } else {
     inner = `<div class="bubble">${quoteHTML}${esc(m.content || '')}</div>`;
   }
-  return `<div class="msg mine" data-mid="${m.id}">
+  return `<div class="msg mine" data-msg-id="${esc(String(m.id))}">
     ${avatarHTML(state.my.avatar, 34)}
     <div class="msg-body">${inner}<div class="msg-time">${fmtClock(m.ts)}</div></div>
   </div>`;
@@ -3918,6 +4502,9 @@ function appendChatMessageNode(roleId, msg) {
   const list = $('#chatList');
   if (!list) return false;
   if (!roleById(roleId)) return false;
+  /* 局部窗口模式下列表不是「末尾」，直接 append 会插到错误位置：
+     退出窗口（回到常规末尾分页）并交给调用方整表重渲 */
+  if (chatWinStart !== null) { chatWinStart = null; chatWinSize = 0; return false; }
   const msgs = chatOf(roleId);
   const prev = msgs[msgs.length - 2];
   const ph = list.querySelector('.typing-placeholder');
@@ -4212,7 +4799,13 @@ function sendTaBurst(roleId, opts) {
         : '';
       if (!text && i === 0 && options.fallback) text = String(options.fallback);
       if (text) {
-        const payload = { type: 'text', content: text, heartTags: roundTags };
+        /* 语音概率：命中时把本轮抽到的字卡文字存进 text 字段但不直接显示，
+           消息类型标记为 voice-ta，时长随机 3~10 秒，由气泡下方文字区展开查看 */
+        const voiceP = clamp(Number(state.settings.taVoiceChance ?? 0), 0, 100);
+        const asVoice = voiceP > 0 && Math.random() * 100 < voiceP;
+        const payload = asVoice
+          ? { type: 'voice-ta', duration: randInt(3, 10), text, content: '[语音]', heartTags: roundTags }
+          : { type: 'text', content: text, heartTags: roundTags };
         if (i === 0 && options.quote) payload.quote = options.quote;
         pushDreamMessage(roleId, payload);
         lastText = text;
@@ -7580,18 +8173,18 @@ const CS_TEMPLATES = {
     -webkit-backdrop-filter: blur(10px);
 }`,
   font: `/* ─── 全局字体样式 ─── */
-*:not(svg):not(i) {
-    font-family: ; /* 填你想要的字体，如 'PingFang SC', sans-serif */
-    color: ; /* 填全局文字颜色，如 #333 */
-    font-size: ; /* 填全局基础字号，如 14px */
-    font-weight: ; /* 填字重，如 400 或 bold */
-    line-height: ; /* 填行高，如 1.5 */
-    letter-spacing: ; /* 填字间距，如 0.5px */
+/* 强制所有元素（包括输入框、按钮）使用该字体 */
+*, *::before, *::after, input, textarea, button {
+    font-family: '你的字体名字', sans-serif !important; 
+    color: #333; 
+    font-size: 14px; 
+    font-weight: 400; 
 }`
 };
 
-/* 字体链接 / 上传 TTF 共用的基础选择器：让全站文字立刻使用新字体 */
-const CS_FONT_SELECTOR = 'body, .chat-text';
+/* 字体链接 / 上传 TTF 共用的基础选择器：全站铺满（含输入框、按钮、下拉框），
+   不再只作用于 body —— 表单控件不会自动继承 body 字体，必须显式点名 */
+const CS_FONT_SELECTOR = '*, *::before, *::after, input, textarea, button, select';
 
 let csTab = 'font';                        /* 当前分类：font / bubble */
 const csDraft = { font: '', bubble: '' };  /* 输入框草稿（内存态，切换分类不丢） */
@@ -7627,9 +8220,32 @@ function csPreviewStyle() {
 function applyCustomStyleInline(b) {
   const cs = (b && b.customStyle) || {};
   const applied = cs.applied || {};
-  const css = [applied.font, applied.bubble].filter(Boolean).join('\n\n');
-  /* 防污染：注入全局前统一锁进 #page-chat 作用域（Toast / 来电弹窗都在 #page-chat 之外） */
-  csInjector().textContent = css ? csScopeToChat(css) : '';
+  /* 字体：全站生效，绝不锁 #page-chat ——
+     锁定后只有聊天页文字变字体，输入框、按钮、其它子页面仍然是默认字体；
+     @font-face 与字体选择器一起拼接注入，保证自定义 TTF 真正全局生效 */
+  const font = applied.font ? csEnsureGlobalFont(applied.font) : '';
+  /* 气泡：仍锁进 #page-chat，避免用户写 div / .bubble 这类宽泛选择器误伤 Toast、来电弹窗 */
+  const bubble = applied.bubble ? csScopeToChat(applied.bubble) : '';
+  /* 先清空再写入：每次应用都是全量替换，绝不会与上一次的规则叠加冲突 */
+  const el = csInjector();
+  el.textContent = '';
+  el.textContent = [font, bubble].filter(Boolean).join('\n\n');
+}
+
+/* 全局字体兜底：用户只写了 body 之类的宽泛选择器时，追加一条通配规则，
+   把同一个字体栈强制铺到所有元素（含 input / textarea / button / select），
+   解决"表单控件不继承 body 字体"导致的字体不统一 */
+function csEnsureGlobalFont(css) {
+  const src = String(css || '');
+  if (!/font-family/i.test(src)) return src;
+  /* 取最后一条 font-family 声明：@font-face 的声明在前，真正生效的使用规则在后 */
+  const decls = src.match(/font-family\s*:\s*[^;}]+/gi) || [];
+  if (!decls.length) return src;
+  const stack = decls[decls.length - 1].replace(/^font-family\s*:\s*/i, '').trim();
+  if (!stack || stack.indexOf('var(') !== -1) return src;
+  /* 已经写了通配符覆盖（如模板里的 * 规则）就不重复追加 */
+  if (/^\s*\*\s*[,{]/m.test(src) || /\*\s*,?\s*\*::before/m.test(src)) return src;
+  return src + `\n/* 全局字体兜底：强制铺满所有元素，含输入框与按钮 */\n${CS_FONT_SELECTOR} { font-family: ${stack} !important; }`;
 }
 
 /* 字体格式：按后缀推断 format()，保证浏览器能正确解码 */
@@ -7819,8 +8435,9 @@ function csScopeToChat(css) {
 }
 
 /* 智能解析：纯链接 → @font-face / @import；带大括号的完整 CSS → 原样注入（只补 !important）；
-   纯属性 → 自动包裹该分类的精准选择器（气泡 .msg .bubble / 字体 body, .chat-text）。
-   注意：这里不做作用域；全局注入入口 applyCustomStyleInline 会统一再套 #page-chat。 */
+   纯属性 → 自动包裹该分类的精准选择器（气泡 .msg .bubble / 字体全站选择器）。
+   注意：这里不做作用域；全局注入入口 applyCustomStyleInline 只对气泡代码套 #page-chat，
+   字体代码保持全站生效。 */
 function csBuildCSS(raw, tab) {
   const text = String(raw == null ? '' : raw).trim();
   if (!text) return '';
@@ -7842,8 +8459,10 @@ function csBuildCSS(raw, tab) {
     return alias ? base + '\n\n' + alias : base;
   }
 
-  /* 3) 纯属性：自动包裹该分类的精准选择器（注入时再锁 #page-chat，绝不污染系统浮层） */
-  const target = tab === 'bubble' ? '.msg .bubble' : 'body, .chat-text';
+  /* 3) 纯属性：自动包裹该分类的精准选择器
+     字体：直接用全站选择器（含输入框/按钮），因为字体不再锁 #page-chat 而需全站生效；
+     气泡：仍用 .msg .bubble，注入时再锁 #page-chat，绝不污染系统浮层 */
+  const target = tab === 'bubble' ? '.msg .bubble' : CS_FONT_SELECTOR;
   return csForceImportant(`${target} { ${text} }`);
 }
 
@@ -8327,7 +8946,7 @@ function customStylePanelHTML() {
       </div>
       <!-- 代码输入区 -->
       <textarea class="cs-input" id="csInput" spellcheck="false" placeholder="请粘贴 CSS 代码、在线字体链接或 CSS 文件链接">${esc(csDraft[csTab] || '')}</textarea>
-      <div class="muted" style="font-size:12px;margin:6px 0 0;line-height:1.6">样式只在聊天页内生效（自动锁定 #page-chat 作用域），绝不会污染 Toast、来电弹窗等系统界面。纯属性（如 background: pink;）会自动包裹气泡/文字选择器并强制加 !important；含花括号的代码原样注入。贴字体直链（.ttf / .woff / .woff2）自动生成 @font-face，贴 .css 链接自动生成 @import。若应用成功但界面没变化，请检查类名是否命中 .msg.mine / .msg.theirs > .msg-body > .bubble（可在控制台检查）。</div>
+      <div class="muted" style="font-size:12px;margin:6px 0 0;line-height:1.6">字体样式全站生效（普通文字、输入框、按钮统一，自定义 TTF 会自动生成 @font-face 并拼接注入）；气泡样式自动锁定 #page-chat 作用域，绝不会污染 Toast、来电弹窗等系统界面。纯属性（如 background: pink;）会自动包裹气泡/文字选择器并强制加 !important；含花括号的代码原样注入。贴字体直链（.ttf / .woff / .woff2）自动生成 @font-face，贴 .css 链接自动生成 @import。若应用成功但界面没变化，请检查类名是否命中 .msg.mine / .msg.theirs > .msg-body > .bubble（可在控制台检查）。</div>
       <!-- 统一预览区：DOM 与真实聊天页完全一致（.msg.theirs / .msg.mine > .msg-body > .bubble），
            字体与气泡代码合并注入，预览里生效的代码在真实聊天页必然也生效 -->
       <div id="style-preview-container" class="cs-preview style-preview-container">
@@ -15219,6 +15838,7 @@ function renderProbabilityPage() {
       <div class="panel-title">聊天互动</div>
       ${sliderRowHTML(`${dn}撤回消息概率`, `${dn} 发出文字或表情消息后，按该概率在数秒后撤回`, 'taRecallChance', s.taRecallChance, 0, 100, '%')}
       ${sliderRowHTML(`${dn}引用消息概率`, `${dn} 回复时按该概率引用你之前的一条消息`, 'taQuoteChance', s.taQuoteChance, 0, 100, '%')}
+      ${sliderRowHTML(`${dn}发语音概率`, `命中时${dn}把本次字卡文字转成语音气泡（3~10 秒），点气泡可展开文字`, 'taVoiceChance', s.taVoiceChance, 0, 100, '%')}
     </div>
     <div class="panel" id="section-call">
       <div class="panel-title">语音来电</div>
@@ -15315,6 +15935,8 @@ function renderProbabilityPage() {
   bindProbSlider('replyDelayMax', 'replyDelayMaxRange', 'replyDelayMaxNum', 0, 300);
   bindProbSlider('taRecallChance', 'taRecallChanceRange', 'taRecallChanceNum', 0, 100);
   bindProbSlider('taQuoteChance', 'taQuoteChanceRange', 'taQuoteChanceNum', 0, 100);
+  /* TA 发语音概率：滑块 input 实时写回 settings.taVoiceChance，bindProbSlider 内部即时 persist() */
+  bindProbSlider('taVoiceChance', 'taVoiceChanceRange', 'taVoiceChanceNum', 0, 100);
   bindProbSlider('locationCooldown', 'locationCooldownRange', 'locationCooldownNum', 0, 3600);
   bindProbSlider('mergeChance', 'mergeChanceRange', 'mergeChanceNum', 0, 100);
   bindProbSlider('mergeMin', 'mergeMinRange', 'mergeMinNum', 2, 6);

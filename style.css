@@ -3690,6 +3690,7 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
   flex:0 0 auto;display:flex;align-items:center;gap:8px;
   padding:9px 12px;background:#fff;
   border-bottom:.5px solid var(--line);
+  position:relative;              /* 作为「按日期」透明日期控件的定位容器 */
 }
 .filter-btn{
   padding:6px 14px;border-radius:999px;
@@ -3700,6 +3701,43 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
 }
 .filter-btn.active{background:var(--primary);color:#fff;}
 .filter-btn:active{opacity:.75;}
+
+/* ===== 搜索筛选栏右侧【按日期】 =====
+   胶囊按钮 + 覆盖其上的透明原生 input[type=date]：
+   点按钮 = 点原生控件 → 直接弹出系统日历（iOS / Android / 桌面均无需额外 JS） */
+.date-filter-wrap{
+  position:relative;flex:0 0 auto;margin-left:auto;
+  display:inline-flex;align-items:center;
+}
+.date-btn{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:6px 11px;border-radius:999px;
+  font-size:13px;line-height:1.2;font-weight:500;color:#3c4149;
+  background:#f0f1f4;
+  transition:background-color .15s,color .15s;
+  -webkit-tap-highlight-color:transparent;
+}
+.date-btn svg{width:14px;height:14px;flex:0 0 auto;}
+.date-btn span{white-space:nowrap;}
+/* 选中日期：高亮为主题色实底白字，文字变成 MM-DD */
+.date-btn.active{background:var(--primary);color:#fff;}
+.date-btn:active{opacity:.75;}
+/* 透明日期控件：铺满按钮区域，视觉不可见但可点击 */
+.search-date-input{
+  position:absolute;left:0;top:0;width:100%;height:100%;
+  margin:0;padding:0;border:0;background:transparent;
+  opacity:0;cursor:pointer;z-index:2;
+  -webkit-tap-highlight-color:transparent;
+}
+/* 日期旁的小 ×（清除日期，恢复全时间范围搜索） */
+.date-clear{
+  flex:0 0 auto;width:20px;height:20px;border-radius:50%;
+  display:grid;place-items:center;
+  font-size:12px;line-height:1;color:#5f6672;
+  background:rgba(0,0,0,.07);
+  -webkit-tap-highlight-color:transparent;
+}
+.date-clear:active{opacity:.6;}
 /* 结果列表：自带滚动，结果再多也不顶开搜索条 */
 .csch-results{
   flex:1 1 auto;min-height:0;overflow-y:auto;
@@ -3810,3 +3848,78 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
   font-weight:600;
 }
 .btn.card-import-cta:active{transform:scale(.97);box-shadow:0 3px 8px rgba(var(--primary-rgb),.3);}
+
+/* ===================== 语音消息：录音按钮 / 双向语音气泡 ===================== */
+/* 录音中的麦克风：图标变红 + 呼吸光圈，提示正在采集 */
+.ci-ico.recording svg{stroke:var(--danger) !important;}
+.ci-ico.recording{background:rgba(255,90,95,.10);}
+.ci-ico.recording::after{
+  content:"";position:absolute;inset:1px;border-radius:50%;pointer-events:none;
+  background:radial-gradient(circle,rgba(255,90,95,.30),rgba(255,90,95,0) 70%);
+  animation:voiceBreath 1.4s ease-in-out infinite;
+}
+@keyframes voiceBreath{
+  0%,100%{transform:scale(.72);opacity:.45;}
+  50%{transform:scale(1.14);opacity:1;}
+}
+
+/* 语音气泡：外壳就是标准 .bubble，完全继承主题色与自定义气泡美化；
+   宽度由内联 min-width 随时长增长（每 1 秒 +6px），最高 180px */
+.voice-bubble{display:inline-flex;align-items:center;gap:8px;min-height:38px;}
+.voice-bubble .vio{display:inline-flex;align-items:center;color:inherit;opacity:.92;}
+.voice-bubble .vio svg{width:17px;height:17px;stroke:currentColor;fill:none;}
+.voice-bubble .vtxt{font-size:13px;font-weight:600;letter-spacing:.5px;opacity:.9;}
+.voice-bubble.playing .vio{animation:voicePulse 1s ease-in-out infinite;}
+@keyframes voicePulse{0%,100%{opacity:.45;}50%{opacity:1;}}
+
+/* TA 语音：气泡 + 默认隐藏的转文字区，点气泡展开（.hidden 由全局规则控制） */
+.voice-wrap{display:flex;flex-direction:column;gap:6px;max-width:100%;}
+.voice-text{
+  background:#fff;border:1px solid var(--line);border-radius:10px;
+  padding:9px 12px;font-size:14px;line-height:1.6;color:var(--text);
+  white-space:pre-wrap;word-break:break-word;box-shadow:var(--shadow);
+}
+
+/* ===================== 微信式长按录音：按钮按压态 + 全屏浮层 ===================== */
+/* 麦克风按钮：按住时背景变深，给出明确按压反馈；禁掉长按呼出复制菜单 */
+#btnMic{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;touch-action:none;}
+#btnMic:active{background:#dfe3ea;}
+#btnMic.recording:active{background:rgba(255,90,95,.18);}
+
+/* 全屏录音浮层（默认 .hidden；由 app.js 懒创建到 body 末尾） */
+#voice-recording-overlay{
+  position:fixed;inset:0;z-index:9998;
+  display:flex;align-items:center;justify-content:center;
+  background:rgba(15,18,24,.55);backdrop-filter:blur(6px);
+  touch-action:none;overscroll-behavior:contain;
+}
+#voice-recording-overlay.hidden{display:none !important;}
+.vro-card{
+  width:212px;padding:22px 18px 18px;border-radius:22px;
+  background:rgba(28,32,40,.92);color:#fff;
+  display:flex;flex-direction:column;align-items:center;gap:12px;
+  box-shadow:0 18px 50px rgba(0,0,0,.45);
+  transition:background .16s ease,box-shadow .16s ease,transform .16s ease;
+}
+/* 上滑超过 50px：整张卡变红，图标换成垃圾桶，提示改成取消发送 */
+#voice-recording-overlay.cancel .vro-card{
+  background:rgba(198,40,40,.94);
+  box-shadow:0 18px 50px rgba(198,40,40,.42);
+  transform:scale(.98);
+}
+.vro-icon{display:grid;place-items:center;color:var(--primary);}
+.vro-icon svg{width:54px;height:54px;stroke:currentColor;fill:none;}
+#voice-recording-overlay.cancel .vro-icon{color:#fff;}
+.vro-wave{display:flex;align-items:flex-end;gap:4px;height:26px;}
+.vro-wave i{width:4px;height:10px;border-radius:2px;background:var(--primary);animation:vroWave .9s ease-in-out infinite;}
+.vro-wave i:nth-child(2){animation-delay:.12s;}
+.vro-wave i:nth-child(3){animation-delay:.24s;}
+.vro-wave i:nth-child(4){animation-delay:.36s;}
+.vro-wave i:nth-child(5){animation-delay:.48s;}
+#voice-recording-overlay.cancel .vro-wave i{background:#fff;}
+@keyframes vroWave{
+  0%,100%{height:8px;opacity:.55;}
+  50%{height:24px;opacity:1;}
+}
+.vro-time{font-size:22px;font-weight:600;letter-spacing:1px;font-variant-numeric:tabular-nums;}
+.vro-tip{font-size:13px;opacity:.88;}   /* 「手指松开，发送」/「松开手指，取消发送」 */
