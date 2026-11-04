@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.6.0';
+const APP_VERSION = 'v8.6.1';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -4853,11 +4853,16 @@ function sendTaBurst(roleId, opts) {
       if (!text && i === 0 && options.fallback) text = String(options.fallback);
       if (text) {
         /* 语音概率：命中时把本轮抽到的字卡文字存进 text 字段但不直接显示，
-           消息类型标记为 voice-ta，时长随机 3~10 秒，由气泡下方文字区展开查看 */
+           消息类型标记为 voice-ta；时长由下方按字数换算，文字藏在气泡下方文字区展开查看 */
         const voiceP = clamp(Number(state.settings.taVoiceChance ?? 0), 0, 100);
         const asVoice = voiceP > 0 && Math.random() * 100 < voiceP;
+        /* 语音时长按字数换算，不再纯随机：
+           中文自然语速约每秒 4 个字 → ceil(字数 / 4)，再随机 +0~1 秒制造自然波动 */
+        let calcDuration = Math.ceil(String(text).trim().length / 4);
+        calcDuration = calcDuration + (Math.random() > 0.5 ? 1 : 0);
+        const finalDuration = clamp(calcDuration, 1, 60);   /* 最短 1 秒，最长 60 秒 */
         const payload = asVoice
-          ? { type: 'voice-ta', duration: randInt(3, 10), text, content: '[语音]', heartTags: roundTags }
+          ? { type: 'voice-ta', duration: finalDuration, text, content: '[语音]', heartTags: roundTags }
           : { type: 'text', content: text, heartTags: roundTags };
         if (i === 0 && options.quote) payload.quote = options.quote;
         pushDreamMessage(roleId, payload);
