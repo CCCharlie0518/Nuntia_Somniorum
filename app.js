@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.6.2';
+const APP_VERSION = 'v8.6.3';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -3658,6 +3658,9 @@ function renderChatMessages(keepScroll) {
   ensureChatDelegation(list);
   /* 长按（或右键）气泡弹出操作菜单：删除 / 撤回（仅自己）/ 引用；同样只绑定一次 */
   bindBubbleLongPress(list);
+  /* 渲染完成后按第一张卡片的真实背景重算文字色（自定义 CSS 改浅底时自动转深灰字）。
+     放进 rAF：读计算样式会触发布局，放到下一帧不阻塞当前渲染与滚动 */
+  requestAnimationFrame(() => { try { syncCardTextColorFromDom(); } catch (e) { /* 忽略 */ } });
   const sc = $('#chatScroll');
   /* 窗口模式或 keepScroll（搜索跳转的局部渲染 / 加载更多）一律不强制贴底：
      贴底会把刚跳到的旧消息又甩回最新消息处 */
@@ -8327,7 +8330,75 @@ function applyCustomStyleInline(b) {
   const el = csInjector();
   el.textContent = '';
   el.textContent = [font, bubble].filter(Boolean).join('\n\n');
+  /* 自定义气泡常把背景改成浅色：立刻按页面上第一张卡片的真实背景重算文字色，
+     避免转账 / 送礼 / 定位 / 心情卡仍是白字看不清（无卡片时保持现有值） */
+  try { syncCardTextColorFromDom(); } catch (e) { /* 忽略，不影响注入 */ }
 }
+
+/* =========================================================
+ * 卡片文字色自适配：根据卡片真实背景亮度写入 --card-text-color
+ * 背景浅（亮度 > 180）→ #333333；背景深 → #ffffff；
+ * 颜色无法解析（纯渐变 / 背景图 / 透明）→ 兜底白色，保持与旧版一致。
+ * ========================================================= */
+const CARD_SELECTORS = '.redpacket-bubble,.gift-bubble,.loc-bubble,.mood-bubble,.read-invite-bubble';
+
+/* 解析 #rgb / #rrggbb / #rrggbbaa / rgb() / rgba() → {r,g,b}；无法解析返回 null。
+   半透明色按「叠在白色画布上」的观感折算，避免浅色 + 低透明度被误判成深色 */
+function parseCardBgColor(input) {
+  const s = String(input == null ? '' : input).trim().toLowerCase();
+  if (!s || s === 'transparent') return null;
+  let m = s.match(/^#([0-9a-f]{3|6|8})$/i);
+  if (m) {
+    let h = m[1];
+    if (h.length === 3) h = h.split('').map(c => c + c).join('');
+    return {
+      r: parseInt(h.slice(0, 2), 16),
+      g: parseInt(h.slice(2, 4), 16),
+      b: parseInt(h.slice(4, 6), 16)
+    };
+  }
+  m = s.match(/^rgba?\(\s*([\d.]+)\s*[, ]\s*([\d.]+)\s*[, ]\s*([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/);
+  if (m) {
+    let a = 1;
+    if (m[4]) a = m[4].indexOf('%') > -1 ? Number(m[4].slice(0, -1)) / 100 : Number(m[4]);
+    if (!isFinite(a) || a <= 0) return null;
+    a = clamp(a, 0, 1);
+    const to255 = v => clamp(Number(v) || 0, 0, 255);
+    return {
+      r: to255(m[1]) * a + 255 * (1 - a),
+      g: to255(m[2]) * a + 255 * (1 - a),
+      b: to255(m[3]) * a + 255 * (1 - a)
+    };
+  }
+  return null;
+}
+
+/* 核心：按亮度切换卡片文字色（>=180 视为浅色 → 深灰字；否则白字） */
+function updateCardTextColor(bgColorStr) {
+  const rgb = parseCardBgColor(bgColorStr);
+  const root = document.documentElement;
+  if (!rgb) {
+    root.style.setProperty('--card-text-color', '#ffffff');
+    return '#ffffff';
+  }
+  const lum = (rgb.r * 299 + rgb.g * 587 + rgb.b * 114) / 1000;
+  const color = lum > 180 ? '#333333' : '#ffffff';
+  root.style.setProperty('--card-text-color', color);
+  return color;
+}
+
+/* 读取页面上第一张卡片的真实背景色并同步变量。
+   卡片背景若是「底色 + 渐变叠层」（内置深色卡就是这种），backgroundColor 仍可解析，
+   优先用它；只有底色透明 / 纯渐变时按约定回退白色 */
+function syncCardTextColorFromDom() {
+  const el = document.querySelector(CARD_SELECTORS);
+  if (!el) return;                       /* 页面暂无卡片：保持当前值，避免来回闪烁 */
+  const cs = getComputedStyle(el);
+  const bg = parseCardBgColor(cs.backgroundColor);
+  if (bg) { updateCardTextColor(cs.backgroundColor); return; }
+  updateCardTextColor('');
+}
+
 
 /* 全局字体兜底：用户只写了 body 之类的宽泛选择器时，追加一条通配规则，
    把同一个字体栈强制铺到所有元素（含 input / textarea / button / select），

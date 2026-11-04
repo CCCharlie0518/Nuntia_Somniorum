@@ -383,12 +383,29 @@ body.chat-open{overflow:hidden;position:fixed;top:0;left:0;right:0;bottom:0;widt
 }
 .ci-btn:active{background:#f1f3f6;}
 #chatText{
-  flex:1;min-width:0;border:0;background:#f2f4f7;border-radius:18px;padding:9px 13px;
-  font-size:15px;line-height:1.35;resize:none;max-height:88px;min-height:37px;
+  flex:1;min-width:0;border:0;background:#f2f4f7;border-radius:20px;
+  /* 字号固定 15px：过大会把占位符挤成两行、把输入框撑高 */
+  font-size:15px;line-height:1.4;
+  /* 上下内边距收窄，单行刚好被 40px 的最小高度完整包裹 */
+  padding:8px 12px;
+  resize:none;
+  /* min-height 40px：15px 字号 × 1.4 行高 ≈ 21px + 上下 8px 内边距 = 37px，
+     取 40px 留出余量，空态与单行输入高度完全一致，不随输入上下跳动 */
+  min-height:40px;max-height:88px;
+  overflow-y:auto;
   caret-color:var(--primary);transition:box-shadow .18s ease;
 }
 #chatText:focus{box-shadow:0 0 0 2px rgba(var(--primary-rgb),.35);}
-#chatText::placeholder{color:#a8adb7;}
+/* 占位符：单行显示、超宽省略，绝不允许换行把输入框顶高 */
+#chatText::placeholder{
+  font-size:15px;
+  line-height:1.4;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  color:#a8adb7;
+  opacity:1;
+}
 .send-btn{
   background:var(--primary);color:#fff;padding:9px 15px;border-radius:18px;
   font-size:14px;font-weight:600;flex-shrink:0;
@@ -1344,7 +1361,7 @@ body{
 .chat-input{background:rgba(249,249,249,.96);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border-top:.5px solid var(--line);padding:8px 10px calc(8px + var(--safe-bottom));gap:7px;}
 .ci-btn{color:var(--primary);font-size:20px;border-radius:50%;}
 .ci-btn:active{background:rgba(var(--primary-rgb),.08);}
-#chatText{background:#fff;border:.5px solid rgba(60,60,67,.16);border-radius:18px;padding:8px 13px;font-size:15px;}
+#chatText{background:#fff;border:.5px solid rgba(60,60,67,.16);border-radius:20px;padding:8px 12px;font-size:15px;line-height:1.4;min-height:40px;}
 #chatText::placeholder{color:#8E8E93;}
 /* 聊天输入框：清除浏览器默认轮廓/点击高亮，光标与聚焦时的边框、发光统一跟随全局主题色 */
 .chat-input,
@@ -1655,7 +1672,9 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
 .redpacket-bubble{
   background-color:var(--theme-card-dark,var(--primary)) !important;
   background-image:linear-gradient(var(--theme-card-shade,rgba(0,0,0,.10)),var(--theme-card-shade,rgba(0,0,0,.10))) !important;
-  color:#fff !important;display:inline-flex !important;flex-direction:column;align-items:stretch;width:176px;max-width:74vw;padding:12px 14px;border-radius:16px;box-shadow:0 3px 10px rgba(var(--primary-rgb),.22);text-align:left;box-sizing:border-box;
+  /* 卡片文字色由 JS 根据真实背景亮度写入 --card-text-color（浅底 → #333，深底 → #fff）；
+     解析不出颜色时兜底白色，与旧版观感完全一致 */
+  color:var(--card-text-color,#fff) !important;display:inline-flex !important;flex-direction:column;align-items:stretch;width:176px;max-width:74vw;padding:12px 14px;border-radius:16px;box-shadow:0 3px 10px rgba(var(--primary-rgb),.22);text-align:left;box-sizing:border-box;
 }
 /* 浅色卡片（已接收）：主题色 30% 与白色混合得到的浅色变体，与深色卡片形成明确深浅对比 */
 .redpacket-bubble.rp-received{
@@ -1665,15 +1684,15 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
   box-shadow:0 2px 8px rgba(var(--primary-rgb),.12);
 }
 .msg.mine .redpacket-bubble,.msg.theirs .redpacket-bubble{border-radius:16px;}
-.redpacket-bubble .rp-title{font-size:13.5px;font-weight:600;letter-spacing:.5px;opacity:.88;line-height:1.2;color:#fff;}
+.redpacket-bubble .rp-title{font-size:13.5px;font-weight:600;letter-spacing:.5px;opacity:.88;line-height:1.2;color:var(--card-text-color,#fff);}
 .redpacket-bubble.rp-received .rp-title{color:var(--theme-card-text,var(--primary-dark));opacity:.95;}
-.redpacket-bubble .rp-amount{font-size:23px;font-weight:700;letter-spacing:-.4px;line-height:1.2;margin-top:3px;white-space:nowrap;color:#fff;}
+.redpacket-bubble .rp-amount{font-size:23px;font-weight:700;letter-spacing:-.4px;line-height:1.2;margin-top:3px;white-space:nowrap;color:var(--card-text-color,#fff);}
 .redpacket-bubble.rp-received .rp-amount{color:var(--theme-card-text,var(--primary-dark));}
 .redpacket-bubble .rp-amount.long{font-size:19px;}
 .redpacket-bubble .rp-amount.xlong{font-size:15.5px;}
-.redpacket-bubble .rp-note{font-size:11px;opacity:.82;line-height:1.4;margin-top:4px;color:#fff;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;}
+.redpacket-bubble .rp-note{font-size:11px;opacity:.82;line-height:1.4;margin-top:4px;color:var(--card-text-color,#fff);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;}
 .redpacket-bubble.rp-received .rp-note{color:var(--theme-card-text,var(--primary-dark));opacity:.85;}
-.redpacket-bubble .rp-state{font-size:10.5px;opacity:.78;margin-top:8px;color:#fff;}
+.redpacket-bubble .rp-state{font-size:10.5px;opacity:.78;margin-top:8px;color:var(--card-text-color,#fff);}
 .redpacket-bubble.rp-received .rp-state{color:var(--theme-card-text,var(--primary-dark));opacity:.72;}
 /* 送礼卡片：与转账卡片共用三行窄竖向布局，第二行放礼物名称；
    自创礼物名 = 前缀 + 本体，字数较长，放宽到 3 行避免被截断 */
@@ -1852,7 +1871,7 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
 .redpacket-bubble.card-returned .rp-amount,
 .redpacket-bubble.card-returned .rp-note,
 .redpacket-bubble.card-returned .rp-state{color:#a0a0a0 !important;}
-.rp-done{margin-top:10px;background:rgba(255,255,255,.22);border-radius:9px;padding:6px 0;font-size:12px;text-align:center;color:#fff;}
+.rp-done{margin-top:10px;background:rgba(255,255,255,.22);border-radius:9px;padding:6px 0;font-size:12px;text-align:center;color:var(--card-text-color,#fff);}
 
 /* 聊天页送礼面板：与转账面板统一的圆角浅底、细边框、轻阴影 */
 .gift-pick-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;}
@@ -2401,17 +2420,17 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
 }
 .read-invite-bubble .ri-title{
   font-size:16px;font-weight:600;letter-spacing:.4px;
-  line-height:1.3;color:#fff;word-break:break-word;
+  line-height:1.3;color:var(--card-text-color,#fff);word-break:break-word;
 }
 .read-invite-bubble.rp-received .ri-title{color:var(--theme-card-text,var(--primary-dark));}
 .read-invite-bubble .ri-sub{
   font-size:14px;line-height:1.45;margin-top:6px;
-  color:#fff;opacity:.92;word-break:break-word;
+  color:var(--card-text-color,#fff);opacity:.92;word-break:break-word;
 }
 .read-invite-bubble.rp-received .ri-sub{color:#3C3C43;opacity:1;}
 .read-invite-bubble .ri-state{
   font-size:12px;line-height:1.4;margin-top:10px;
-  color:#fff;opacity:.78;
+  color:var(--card-text-color,#fff);opacity:.78;
 }
 .read-invite-bubble.rp-received .ri-state{color:#6B7280;opacity:1;}
 /* 接受 / 拒绝：与转账卡片的「收下」按钮同一套视觉（白底、9px 圆角、12.5px 粗体） */
@@ -3548,17 +3567,18 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
   /* 与 .redpacket-bubble 深色状态完全同款的背景：主题色 + 暗色渐变叠层 + 主题色阴影 */
   background-color:var(--theme-card-dark,var(--primary)) !important;
   background-image:linear-gradient(var(--theme-card-shade,rgba(0,0,0,.10)),var(--theme-card-shade,rgba(0,0,0,.10))) !important;
-  color:#fff !important;
+  /* 与转账卡片共用同一套自适应文字色：浅底自动转深灰，深底保持白色 */
+  color:var(--card-text-color,#fff) !important;
   border-radius:16px !important;
   overflow:hidden;box-shadow:0 3px 10px rgba(var(--primary-rgb),.22);
   text-align:left;
 }
 .loc-header{
-  font-size:16px;font-weight:700;color:#fff !important;line-height:1.2;
+  font-size:16px;font-weight:700;color:var(--card-text-color,#fff) !important;line-height:1.2;
   letter-spacing:.5px;
 }
-/* 分割线：半透明白，在深色背景上呈现最干净的层次 */
-.loc-divider{width:100%;height:1px;background:rgba(255,255,255,.4) !important;margin:4px 0 !important;flex-shrink:0;}
+/* 分割线：跟随文字色变量，浅色底自动变深灰半透明，深色底仍是白色半透明 */
+.loc-divider{width:100%;height:1px;background-color:var(--card-text-color,#fff) !important;opacity:.3;margin:4px 0 !important;flex-shrink:0;}
 /* 地图底纹区域：相对定位，高 80px，网格若隐若现 */
 .loc-map-area{position:relative;height:80px;border-radius:8px;overflow:hidden;}
 .loc-map-bg{
@@ -3622,20 +3642,20 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
 .bubble.mood-bubble{gap:0 !important;}
 .mood-title{
   font-size:15px;font-weight:700;line-height:1.2;letter-spacing:.5px;
-  color:#fff !important;
+  color:var(--card-text-color,#fff) !important;
 }
 .mood-divider{
-  width:100%;height:1px;background:rgba(255,255,255,.4) !important;
+  width:100%;height:1px;background-color:var(--card-text-color,#fff) !important;opacity:.3;
   margin:6px 0 0 !important;flex-shrink:0;
 }
 .mood-main{display:flex;align-items:center;gap:6px;margin-top:7px;min-width:0;}
 .mood-emoji{font-size:22px;line-height:1;flex-shrink:0;}
 .mood-name{
-  font-size:14px;font-weight:600;color:#fff !important;
+  font-size:14px;font-weight:600;color:var(--card-text-color,#fff) !important;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 .mood-reason{
-  font-size:11px;line-height:1.45;opacity:.85;color:#fff !important;
+  font-size:11px;line-height:1.45;opacity:.85;color:var(--card-text-color,#fff) !important;
   margin-top:5px;word-break:break-word;white-space:pre-wrap;
   display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;
 }
