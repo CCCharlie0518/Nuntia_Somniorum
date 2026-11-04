@@ -3881,8 +3881,16 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
 }
 
 /* ===================== 微信式长按录音：按钮按压态 + 全屏浮层 ===================== */
-/* 麦克风按钮：按住时背景变深，给出明确按压反馈；禁掉长按呼出复制菜单 */
-#btnMic{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;touch-action:none;}
+/* 麦克风按钮：按住时背景变深，给出明确按压反馈；
+   同时彻底禁掉长按呼出系统文本选择 / 复制菜单 / 点击高亮 / 手势缩放 */
+#btnMic,
+#btnMic *{
+  -webkit-touch-callout:none !important;      /* 禁止 iOS 长按弹出菜单 */
+  -webkit-user-select:none !important;        /* 禁止选中文字 */
+  user-select:none !important;
+  -webkit-tap-highlight-color:transparent !important;  /* 禁止点击高亮 */
+  touch-action:none !important;               /* 禁止浏览器默认滑动/缩放 */
+}
 #btnMic:active{background:#dfe3ea;}
 #btnMic.recording:active{background:rgba(255,90,95,.18);}
 
@@ -3892,8 +3900,29 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
   display:flex;align-items:center;justify-content:center;
   background:rgba(15,18,24,.55);backdrop-filter:blur(6px);
   touch-action:none;overscroll-behavior:contain;
+  -webkit-touch-callout:none !important;
+  -webkit-user-select:none !important;
+  user-select:none !important;
+  -webkit-tap-highlight-color:transparent !important;
+}
+/* 浮层内所有元素（含图标、波形、计时、提示文字）同样不可选中、不可长按菜单 */
+#voice-recording-overlay *{
+  -webkit-touch-callout:none !important;
+  -webkit-user-select:none !important;
+  user-select:none !important;
+  -webkit-tap-highlight-color:transparent !important;
 }
 #voice-recording-overlay.hidden{display:none !important;}
+
+/* 录音期间（app.js 给 body 加 .voice-recording 类，松手立即移除）：
+   整页兜底禁止选中 / 长按菜单 / 拖拽，最大程度屏蔽系统干扰 */
+body.voice-recording,
+body.voice-recording *{
+  -webkit-touch-callout:none !important;
+  -webkit-user-select:none !important;
+  user-select:none !important;
+  -webkit-tap-highlight-color:transparent !important;
+}
 .vro-card{
   width:212px;padding:22px 18px 18px;border-radius:22px;
   background:rgba(28,32,40,.92);color:#fff;

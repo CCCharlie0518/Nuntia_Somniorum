@@ -601,6 +601,8 @@ function defaultState() {
       taQuoteChance: 15,
       /* TA 发语音概率：命中时把本轮字卡文字转成语音气泡（3~10 秒），点气泡展开文字 */
       taVoiceChance: 30,
+      /* TA 发心情卡片概率：命中时本次回复改为一张心情卡片（随机 emoji/名称 + 1 张字卡作备注） */
+      taMoodChance: 15,
       locationCooldown: 60,
       mergeChance: 50,
       mergeMin: 2,
@@ -966,7 +968,7 @@ function mergeState(saved) {
   if (!Array.isArray(out.pomodoro.records)) out.pomodoro.records = [];
 
   /* 概率参数校正，兼容旧版 / 手工编辑过的备份 */
-  ['replyChance', 'emojiSendChance', 'callChance', 'answerChance', 'spaceLikeChance', 'spaceCommentChance', 'redPacketClaimChance', 'taRedPacketChance', 'taGiftChance', 'autoSnapshotChance', 'pomodoroSpeakChance', 'taRecallChance', 'taQuoteChance', 'taVoiceChance'].forEach(k => {
+  ['replyChance', 'emojiSendChance', 'callChance', 'answerChance', 'spaceLikeChance', 'spaceCommentChance', 'redPacketClaimChance', 'taRedPacketChance', 'taGiftChance', 'autoSnapshotChance', 'pomodoroSpeakChance', 'taRecallChance', 'taQuoteChance', 'taVoiceChance', 'taMoodChance'].forEach(k => {
     const v = Number(out.settings[k]);
     out.settings[k] = Number.isFinite(v) ? clamp(v, 0, 100) : d.settings[k];
   });
@@ -2932,10 +2934,15 @@ function renderChatPage(roleId) {
      再加 setPointerCapture：鼠标移出按钮、甚至移出窗口后再松手，也一定能收到 pointerup。 */
   const micBtn = $('#btnMic');
   micBtn.addEventListener('contextmenu', e => e.preventDefault());
+  /* iOS 老版本仍会先派发 touchstart：非 passive 拦掉，防止长按放大镜/选择柄 */
+  micBtn.addEventListener('touchstart', e => {
+    if (e.cancelable) e.preventDefault();
+  }, { passive: false });
   micBtn.addEventListener('pointerdown', e => {
-    if (e.pointerType === 'mouse' && e.button !== 0) return;   /* 只响应鼠标左键 */
+    /* 第一行就拦掉默认行为：阻止长按系统文本选择 / 复制菜单 / 拖拽高亮 */
     e.preventDefault();
     e.stopPropagation();
+    if (e.pointerType === 'mouse' && e.button !== 0) return;   /* 只响应鼠标左键 */
     try { micBtn.setPointerCapture(e.pointerId); } catch (err) { /* 老浏览器忽略 */ }
     kebab.classList.remove('open');
     closeChatPlus();
@@ -3065,15 +3072,19 @@ function openLocationComposer(roleId) {
  * 消息结构：{ type:'mood', moodName, moodEmoji, reason, content:'[心情] xx' }
  * 走 sendUserMessage 统一入口：自动持久化、触发 TA 延迟回复（字卡）、拾光瓶集星
  * ========================================================= */
-const MOOD_PRESETS = [
-  { name: '开心', emoji: '😊' },
-  { name: '难过', emoji: '😭' },
-  { name: '生气', emoji: '😡' },
-  { name: '疲惫', emoji: '😪' },
-  { name: '兴奋', emoji: '🥰' },
-  { name: '无聊', emoji: '🥱' },
-  { name: '焦虑', emoji: '😰' },
-  { name: '平静', emoji: '😌' }
+/* 心情预设词库（扩充版）：手动「记录心情」与 TA 随机抛出的心情卡片共用同一套预设。
+   30 种情绪覆盖正负面、亲密与日常状态，TA 按 taMoodChance 概率随机抽取。 */
+const taMoodPresets = [
+  { emoji: "😊", name: "愉悦" }, { emoji: "🥰", name: "幸福" }, { emoji: "😆", name: "开心" },
+  { emoji: "✨", name: "惊喜" }, { emoji: "🎉", name: "兴奋" }, { emoji: "💖", name: "心动" },
+  { emoji: "😍", name: "迷恋" }, { emoji: "🫶", name: "想贴贴" }, { emoji: "💘", name: "被击中" },
+  { emoji: "🥺", name: "心软" }, { emoji: "😔", name: "难过" }, { emoji: "😢", name: "委屈" },
+  { emoji: "😞", name: "失落" }, { emoji: "🥀", name: "忧郁" }, { emoji: "🌧️", name: "烦躁" },
+  { emoji: "😤", name: "吃醋" }, { emoji: "😠", name: "生气" }, { emoji: "🍋", name: "酸溜溜" },
+  { emoji: "🔒", name: "占有欲" }, { emoji: "🐺", name: "护食" }, { emoji: "😴", name: "困倦" },
+  { emoji: "🥱", name: "无聊" }, { emoji: "🍵", name: "偷闲" }, { emoji: "🤔", name: "思考" },
+  { emoji: "😶", name: "发呆" }, { emoji: "🫣", name: "害羞" }, { emoji: "😏", name: "腹黑" },
+  { emoji: "😌", name: "安心" }, { emoji: "🤤", name: "馋了" }, { emoji: "🥵", name: "燥热" }
 ];
 
 function openMoodComposer(roleId) {
@@ -3087,7 +3098,7 @@ function openMoodComposer(roleId) {
     },
     body: `
       <div class="mood-presets">
-        ${MOOD_PRESETS.map(p => `<button class="mood-preset" data-moodname="${esc(p.name)}" data-moodemoji="${p.emoji}"><span class="me">${p.emoji}</span>${esc(p.name)}</button>`).join('')}
+        ${taMoodPresets.map(p => `<button class="mood-preset" data-moodname="${esc(p.name)}" data-moodemoji="${p.emoji}"><span class="me">${p.emoji}</span>${esc(p.name)}</button>`).join('')}
       </div>
       <div class="loc-fields">
         <input class="loc-input grow" id="moodNameInput" maxlength="12" placeholder="心情名称，如：想见你">
@@ -4195,17 +4206,59 @@ function updateVoiceOverlay(cancel) {
 /* pointermove / pointerup 常驻绑定在 document 上：
    只有 voicePress.active === true（即按下了麦克风）时才响应，
    因此鼠标在按钮外、甚至窗口外松手也能立刻结束录音，且不影响页面其它点击。
-   录音期间的页面滚动由 #btnMic 的 touch-action:none 与浮层的 touch-action:none 共同锁死。 */
-document.addEventListener('pointermove', e => { moveVoicePress(e.clientY); }, { passive: true });
+   pointermove 必须 passive:false 才能 preventDefault —— 否则按住上滑时会连带把聊天页拖滚。 */
+document.addEventListener('pointermove', e => {
+  if (!voicePress.active) return;              /* 未录音：完全不干预页面正常滚动 */
+  if (e.cancelable) e.preventDefault();
+  moveVoicePress(e.clientY);
+}, { passive: false });
 document.addEventListener('pointerup', () => { endVoicePress(false); });
 document.addEventListener('pointercancel', () => { endVoicePress(true); });
 
-/* 兼容旧调用点：pointer 监听常驻，不需要增删，仅清掉手势标记即可 */
-function detachVoiceGestureDocs() { voicePress.active = false; }
+/* ===================== 录音期间系统级拦截 =====================
+ * 长按 60 秒内不允许出现：系统文本选择 / 复制菜单 / 右键菜单 / 拖拽 / 触摸滚动。
+ * 只在录音真正开始时挂上，录音结束立刻摘下，避免影响正常聊天操作。 */
+let voiceNativeBlocked = false;
+
+function voiceBlockNativeHandler(e) {
+  /* 捕获阶段直接吞掉，阻止 default 与后续冒泡逻辑 */
+  if (e.cancelable) e.preventDefault();
+  e.stopPropagation();
+  return false;
+}
+
+function attachVoiceNativeBlock() {
+  if (voiceNativeBlocked) return;
+  voiceNativeBlocked = true;
+  /* capture:true：先于任何业务监听执行，保证 100% 拦截 */
+  document.addEventListener('contextmenu', voiceBlockNativeHandler, true);
+  document.addEventListener('selectstart', voiceBlockNativeHandler, true);
+  document.addEventListener('dragstart', voiceBlockNativeHandler, true);
+  /* iOS 上仅 pointermove 仍可能被系统当成滚动：touchmove 非 passive 拦死 */
+  document.addEventListener('touchmove', voiceBlockNativeHandler, { capture: true, passive: false });
+  if (document.body) document.body.classList.add('voice-recording');
+}
+
+function detachVoiceNativeBlock() {
+  if (!voiceNativeBlocked) return;
+  voiceNativeBlocked = false;
+  document.removeEventListener('contextmenu', voiceBlockNativeHandler, true);
+  document.removeEventListener('selectstart', voiceBlockNativeHandler, true);
+  document.removeEventListener('dragstart', voiceBlockNativeHandler, true);
+  document.removeEventListener('touchmove', voiceBlockNativeHandler, true);
+  if (document.body) document.body.classList.remove('voice-recording');
+}
+
+/* 松手 / 取消 / 超时 / 异常：统一在这里撤掉手势标记与系统拦截 */
+function detachVoiceGestureDocs() {
+  voicePress.active = false;
+  detachVoiceNativeBlock();
+}
 
 function beginVoicePress(roleId, startY) {
   if (voicePress.active) return;
   voicePress = { active: true, startY: Number(startY) || 0, cancel: false, roleId };
+  attachVoiceNativeBlock();          /* 录音期间锁死系统菜单与选中 */
   showVoiceOverlay(true);
   startVoiceRecord(roleId);
 }
@@ -4882,6 +4935,13 @@ function processReplyQueue(roleId) {
     taSendStickerReply(roleId, gen);
     return;
   }
+  /* 心情卡片分支：按全局概率判定，命中后本次回复只发一张心情卡片；
+     概率 0 时完全跳过，回退为正常字卡回复 */
+  const moodChance = Number(state.settings.taMoodChance ?? 15);
+  if (moodChance > 0 && Math.random() * 100 < moodChance) {
+    taSendMoodReply(roleId, gen);
+    return;
+  }
   taReplyWithCards(roleId, gen);
 }
 
@@ -4913,6 +4973,37 @@ function taSendStickerReply(roleId, gen) {
     if (!now.length) { taReplyWithCards(roleId, gen); return; }
     const sticker = pickOne(now);
     const payload = { type: 'sticker', image: sticker.data, content: '[表情]', heartTags: makeHeartTags() };
+    if (quote) payload.quote = quote;
+    pushDreamMessage(roleId, payload);
+    finishReplyStep(roleId);
+  };
+  const delay = replyDelayMs();
+  if (delay > 0) setTimeout(fire, delay); else fire();
+}
+
+/* TA 回一张心情卡片：从 taMoodPresets 随机抽 emoji + 名称，
+ * 再随机抽 1 张字卡内容作为「心情备注」，单条消息、不参与拼接与连发；
+ * 「正在输入…」与延迟节奏和普通回复一致 */
+function taSendMoodReply(roleId, gen) {
+  const quote = maybeTaQuote(roleId);
+  typingMap.set(roleId, true);
+  renderChatIf(roleId);
+  refreshMessagesPage();
+  const fire = () => {
+    if (gen !== (chatGenMap.get(roleId) || 0)) { finishReplyStep(roleId); return; }
+    typingMap.set(roleId, false);
+    const preset = pickOne(taMoodPresets) || { emoji: '💭', name: '心情' };
+    /* 备注：随机 1 张字卡内容；字卡库为空则不写备注，卡片只显示 emoji + 名称 */
+    const pool = (state.cards || []).filter(c => c && c.enabled !== false && c.content && String(c.content).trim());
+    const reason = pool.length ? String(pickOne(pool).content).trim().slice(0, 120) : '';
+    const payload = {
+      type: 'mood',
+      moodEmoji: preset.emoji,
+      moodName: preset.name,
+      reason,
+      content: '[心情] ' + preset.name,
+      heartTags: makeHeartTags()
+    };
     if (quote) payload.quote = quote;
     pushDreamMessage(roleId, payload);
     finishReplyStep(roleId);
@@ -15839,6 +15930,7 @@ function renderProbabilityPage() {
       ${sliderRowHTML(`${dn}撤回消息概率`, `${dn} 发出文字或表情消息后，按该概率在数秒后撤回`, 'taRecallChance', s.taRecallChance, 0, 100, '%')}
       ${sliderRowHTML(`${dn}引用消息概率`, `${dn} 回复时按该概率引用你之前的一条消息`, 'taQuoteChance', s.taQuoteChance, 0, 100, '%')}
       ${sliderRowHTML(`${dn}发语音概率`, `命中时${dn}把本次字卡文字转成语音气泡（3~10 秒），点气泡可展开文字`, 'taVoiceChance', s.taVoiceChance, 0, 100, '%')}
+      ${sliderRowHTML(`${dn}发心情卡片概率`, `命中时${dn}本次回复改为一张心情卡片：从 30 种预设里随机抽 emoji + 情绪，并附 1 张字卡作备注`, 'taMoodChance', s.taMoodChance, 0, 100, '%')}
     </div>
     <div class="panel" id="section-call">
       <div class="panel-title">语音来电</div>
@@ -15937,6 +16029,8 @@ function renderProbabilityPage() {
   bindProbSlider('taQuoteChance', 'taQuoteChanceRange', 'taQuoteChanceNum', 0, 100);
   /* TA 发语音概率：滑块 input 实时写回 settings.taVoiceChance，bindProbSlider 内部即时 persist() */
   bindProbSlider('taVoiceChance', 'taVoiceChanceRange', 'taVoiceChanceNum', 0, 100);
+  /* TA 发心情卡片概率：同样实时写回 settings.taMoodChance 并立即保存 */
+  bindProbSlider('taMoodChance', 'taMoodChanceRange', 'taMoodChanceNum', 0, 100);
   bindProbSlider('locationCooldown', 'locationCooldownRange', 'locationCooldownNum', 0, 3600);
   bindProbSlider('mergeChance', 'mergeChanceRange', 'mergeChanceNum', 0, 100);
   bindProbSlider('mergeMin', 'mergeMinRange', 'mergeMinNum', 2, 6);
