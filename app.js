@@ -2805,7 +2805,7 @@ function renderChatPage(roleId) {
     </div>
     <div class="chat-input" id="chatInputRow">
       <button class="ci-btn" id="btnPlus" title="更多">＋</button>
-      <textarea id="chatText" rows="1" placeholder="发消息给 ${esc(dn)}…"></textarea>
+      <textarea id="chatText" rows="1" placeholder="发消息…"></textarea>
       <button class="ci-ico" id="btnMic" title="录音" aria-label="录音">${MIC_ICON}</button>
       <button class="ci-ico" id="btnSticker" title="表情包" aria-label="表情包">${APP_ICONS.smile}</button>
       <button class="ci-ico" id="btnImage" title="发图片" aria-label="发图片">${APP_ICONS.image}</button>
