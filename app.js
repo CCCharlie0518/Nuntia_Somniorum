@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.6.1';
+const APP_VERSION = 'v8.6.2';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -2786,6 +2786,7 @@ function renderChatPage(roleId) {
     <div class="img-draft-bar" id="imgDraftBar"><div class="img-draft-list" id="imgDraftList"></div></div>
     <div class="chat-plus-panel" id="chatPlusPanel">
       <div class="plus-grid">
+        <button class="plus-cell" data-plus="image"><span>${APP_ICONS.image}</span>发送图片</button>
         <button class="plus-cell" data-plus="redpacket"><span>${APP_ICONS.redpackets}</span>转账</button>
         <button class="plus-cell" data-plus="gift"><span>${APP_ICONS.gifts}</span>送礼物</button>
         <button class="plus-cell" data-plus="quiz"><span>${APP_ICONS.quizzes}</span>问卷</button>
@@ -2808,7 +2809,6 @@ function renderChatPage(roleId) {
       <textarea id="chatText" rows="1" placeholder="发消息…"></textarea>
       <button class="ci-ico" id="btnMic" title="录音" aria-label="录音">${MIC_ICON}</button>
       <button class="ci-ico" id="btnSticker" title="表情包" aria-label="表情包">${APP_ICONS.smile}</button>
-      <button class="ci-ico" id="btnImage" title="发图片" aria-label="发图片">${APP_ICONS.image}</button>
       <button class="send-btn" id="btnSend">发送</button>
     </div>
     <div class="chat-selectbar hidden" id="chatSelBar">
@@ -2954,19 +2954,20 @@ function renderChatPage(roleId) {
     kebab.classList.remove('open');
     toggleStickerSheet(roleId);
   });
-  $('#btnImage').addEventListener('click', e => {
-    e.stopPropagation();
-    kebab.classList.remove('open');
-    closeChatPlus();
-    closeStickerSheet();
-    showActionSheet('发图片', [
-      { label: '拍照', onClick: () => pickChatImages(roleId, true) },
-      { label: '从相册选择', onClick: () => pickChatImages(roleId, false) }
-    ]);
-  });
   $$('[data-plus]', $('#chatPlusPanel')).forEach(btn => btn.addEventListener('click', () => {
     const kind = btn.dataset.plus;
-    closeChatPlus();
+    closeChatPlus();          /* 选中任意一项先收起 + 面板，选图流程不占用菜单层 */
+    if (kind === 'image') {
+      /* 原输入框右侧【发图片】的完整逻辑迁移至此：拍照 / 相册两条入口，
+         后续多图暂存预览、配文发送均由 pickChatImages 内部处理，行为不变 */
+      kebab.classList.remove('open');
+      closeStickerSheet();
+      showActionSheet('发图片', [
+        { label: '拍照', onClick: () => pickChatImages(roleId, true) },
+        { label: '从相册选择', onClick: () => pickChatImages(roleId, false) }
+      ]);
+      return;
+    }
     if (kind === 'redpacket') openRedPacketComposer(roleId);
     else if (kind === 'gift') openGiftComposer(roleId);
     else if (kind === 'ledger') enterLedgerMode(roleId);
