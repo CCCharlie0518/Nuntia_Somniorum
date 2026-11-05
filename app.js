@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.6.3';
+const APP_VERSION = 'v8.7.0';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -68,6 +68,14 @@ const fmtBytes = bytes => {
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
   return (bytes / 1024 / 1024).toFixed(2) + ' MB';
 };
+
+/* 睡眠静默判定（全局）：一起睡觉期间，TA 的所有主动行为一律拦截。
+ * 所有定时器 / 触发函数（主动消息、空间、转账、送礼、来电、来信、拍一拍、留影、共读邀请…）
+ * 在函数最开头调用 sleepSilent()，命中即直接 return，绝不生成任何 TA 行为或弹窗。
+ * state 在 boot 时才就绪，本函数只在运行期被调用，直接读内存，绝不触碰存储层。 */
+function sleepSilent() {
+  try { return !!(state && state.sleep && state.sleep.isSleeping); } catch (e) { return false; }
+}
 
 /* 颜色处理 */
 function hexToRgb(hex) {
@@ -647,7 +655,10 @@ function defaultState() {
       spaceProactiveEnabled: true,
       spaceProactiveChance: 15,
       spaceProactiveMin: 30,
-      spaceProactiveMax: 90
+      spaceProactiveMax: 90,
+      /* 定时睡眠：到点自动强制进入睡眠遮罩（ HH:mm，本地时区） */
+      sleepScheduleEnabled: false,
+      sleepScheduleTime: '23:30'
     },
     nextProactiveAt: 0,
     nextSpaceProactiveAt: 0,
@@ -741,6 +752,14 @@ function defaultState() {
     nextAutoLetterAt: 0,
     nextTaGiftAt: 0,
     nextTaRedPacketAt: 0,
+    /* 一起睡觉：进行中状态 / 开始时间 / 待结算标记 / 待查看的睡眠数据 / 历史记录 */
+    sleep: {
+      isSleeping: false,
+      startTime: 0,
+      pendingSummary: false,
+      pendingSleepData: null,
+      history: []
+    },
     /* 上次离开页面的时间戳（毫秒）：离线消息横幅据此结算这段时间内的新消息与超时待办 */
     lastSeenAt: 0
   };
@@ -939,7 +958,44 @@ function mergeState(saved) {
   if (!out.readData.books.some(b => b.id === out.readData.bookId)) {
     out.readData.bookId = out.readData.books[0] ? out.readData.books[0].id : '';
   }
+  /* 一起睡觉：状态字段白名单化 + 历史记录清洗（旧数据 / 手工改坏的数据都不会让页面报错）。
+     整段用 try-catch 包住：睡眠数据异常时退回空状态，绝不影响整体启动 */
+  try {
+    const slSrc = (out.sleep && typeof out.sleep === 'object') ? out.sleep : {};
+    const normSleepRecord = r => (r && typeof r === 'object' && Number(r.startTime) && Number(r.endTime)) ? {
+      id: String(r.id || uid()),
+      roleId: typeof r.roleId === 'string' ? r.roleId : '',
+      startTime: Number(r.startTime),
+      endTime: Number(r.endTime),
+      duration: Math.max(0, Number(r.duration) || (Number(r.endTime) - Number(r.startTime))),
+      timeline: Array.isArray(r.timeline) ? r.timeline
+        .filter(x => x && Number(x.ts))
+        .map(x => ({
+          ts: Number(x.ts),
+          kind: ['action', 'murmur', 'inner', 'watching'].indexOf(x.kind) >= 0 ? x.kind : 'inner',
+          text: String(x.text == null ? '' : x.text)
+        }))
+        .filter(x => x.text)
+        .sort((a, b) => a.ts - b.ts) : []
+    } : null;
+    const pending = normSleepRecord(slSrc.pendingSleepData);
+    out.sleep = {
+      isSleeping: slSrc.isSleeping === true && Number(slSrc.startTime) > 0,
+      startTime: Number(slSrc.startTime) || 0,
+      pendingSummary: slSrc.pendingSummary === true && !!pending,
+      pendingSleepData: pending,
+      history: Array.isArray(slSrc.history) ? slSrc.history.map(normSleepRecord).filter(Boolean).slice(0, 100) : []
+    };
+  } catch (e) {
+    console.warn('[sleep] 状态归一化失败，已重置为空状态：', e);
+    out.sleep = { isSleeping: false, startTime: 0, pendingSummary: false, pendingSleepData: null, history: [] };
+  }
   out.nextTaReadInviteAt = Number(out.nextTaReadInviteAt) || 0;
+  /* 定时睡眠：开关布尔化 + 时间必须为合法 HH:mm；当日已触发标记随 state 持久化（防重复触发） */
+  out.settings.sleepScheduleEnabled = out.settings.sleepScheduleEnabled === true;
+  const slTime = String(out.settings.sleepScheduleTime || '');
+  out.settings.sleepScheduleTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(slTime) ? slTime : '23:30';
+  out.lastSleepTriggerDate = typeof out.lastSleepTriggerDate === 'string' ? out.lastSleepTriggerDate.slice(0, 10) : '';
   /* 一起听：只持久化歌名 / 唱片图 / 播放模式 / 歌单元数据；
      音频本身以 Blob URL 存在运行时，绝不写入 localStorage（刷新后由用户重新上传） */
   const musicSrc = (src.music && typeof src.music === 'object') ? src.music : {};
@@ -1024,9 +1080,9 @@ function mergeState(saved) {
   out.settings.letterAutoEnabled = out.settings.letterAutoEnabled === true;
   const lai = Number(out.settings.letterAutoInterval);
   out.settings.letterAutoInterval = Number.isFinite(lai) ? clamp(Math.round(lai), 1, 10080) : 1440;
-  /* 信件全局拼接：张数 1~6，最少不得大于最多；分隔符只接受预设值 */
-  let lmin = clamp(Math.round(Number(out.settings.letterMergeMin) || 2), 1, 6);
-  let lmax = clamp(Math.round(Number(out.settings.letterMergeMax) || 3), 1, 6);
+  /* 信件全局拼接：张数 1~12，最少不得大于最多；分隔符只接受预设值 */
+  let lmin = clamp(Math.round(Number(out.settings.letterMergeMin) || 2), 1, 12);
+  let lmax = clamp(Math.round(Number(out.settings.letterMergeMax) || 3), 1, 12);
   if (lmin > lmax) { const t = lmin; lmin = lmax; lmax = t; }
   out.settings.letterMergeMin = lmin;
   out.settings.letterMergeMax = lmax;
@@ -2541,6 +2597,7 @@ function publishMoment() {
 /* 到点执行 TA 互动判定：点赞/评论独立按概率判定，每条动态只判一次；
  * 点赞与评论同样按「回复时间」延迟落地，与聊天消息保持一致。 */
 function checkMomentInteractions() {
+  if (sleepSilent()) return;  /* 睡觉中：TA 不点赞、不评论 */
   if (!state || !Array.isArray(state.moments)) return;
   const now = Date.now();
   let changed = false;
@@ -2593,6 +2650,7 @@ function nextProactiveDelay() {
 }
 
 function checkProactiveMessages() {
+  if (sleepSilent()) return;  /* 睡觉中：TA 不主动发消息 */
   if (!state) return;
   const now = Date.now();
   if (!state.nextProactiveAt) {
@@ -4608,6 +4666,9 @@ function markUserRead(roleId, note) {
   persist();
 }
 
+/* 信件拼接张数上限：12（聊天全局拼字卡仍维持原有的 6 张上限） */
+const LETTER_MERGE_MAX = 12;
+
 /* 共用字卡拼接：聊天回复、信件回信、空间评论都走这里，保证行为一致。
  * 字卡全局共享（不再区分梦角/公共），从全部启用字卡中抽取；
  * roleId 仅用于 lastReplies 防连续重复的键。
@@ -4625,9 +4686,9 @@ function composeCardText(roleId, opt) {
   const o = opt || null;
   let lo = 1, hi = 1, sepRaw = '';
   if (o && Number.isFinite(Number(o.mergeMin)) && Number.isFinite(Number(o.mergeMax))) {
-    /* 信件专属拼接：不看全局 mergeChance，按这封信自己的最少/最多张数规则拼接 */
-    lo = clamp(Math.round(Number(o.mergeMin)), 1, 6);
-    hi = clamp(Math.round(Number(o.mergeMax)), lo, 6);
+    /* 信件专属拼接：不看全局 mergeChance，按这封信自己的最少/最多张数规则拼接（上限 12） */
+    lo = clamp(Math.round(Number(o.mergeMin)), 1, LETTER_MERGE_MAX);
+    hi = clamp(Math.round(Number(o.mergeMax)), lo, LETTER_MERGE_MAX);
     sepRaw = o.mergeSeparator == null ? '，' : String(o.mergeSeparator);
   } else {
     /* 全局：字卡不足 2 张时强制单张，防报错；否则按 mergeChance 概率决定单张 / 拼接 */
@@ -4642,7 +4703,8 @@ function composeCardText(roleId, opt) {
     }
   }
 
-  const n = clamp(randInt(lo, hi), 1, Math.min(6, pool.length));
+  /* 上限：信件 12 张，聊天全局仍为 6 张；字卡总数不够时按实际数量拼接，绝不报错 */
+  const n = clamp(randInt(lo, hi), 1, Math.min(o ? LETTER_MERGE_MAX : 6, pool.length));
   const sep = sepRaw === ' ' ? ' ' : sepRaw === '\n' ? '\n' : sepRaw;
   const lastKey = (o && o.key) || roleId;
   const last = state.lastReplies[lastKey] || '';
@@ -4750,6 +4812,7 @@ function userPatRole(roleId) {
 
 /* TA 主动拍我：按拍一拍冷却节奏判定，命中概率后随机选一个梦角 */
 function checkTaPat() {
+  if (sleepSilent()) return;  /* 睡觉中：TA 不主动拍我 */
   if (!state) return;
   const now = Date.now();
   const cd = clamp(Math.round(Number(state.settings.patCooldown ?? 10)), 0, 120);
@@ -4777,6 +4840,7 @@ function nextSpaceProactiveDelay() {
   return randInt(min, max) * 60 * 1000;
 }
 function checkTaSpacePosts() {
+  if (sleepSilent()) return;  /* 睡觉中：TA 不主动发空间动态 */
   if (!state) return;
   const now = Date.now();
   if (!state.nextSpaceProactiveAt) { state.nextSpaceProactiveAt = now + nextSpaceProactiveDelay(); persist(); return; }
@@ -5468,6 +5532,7 @@ function scheduleIncoming() {
 }
 
 function tryIncomingCall() {
+  if (sleepSilent()) return;  /* 睡觉中：TA 不主动打来电话 */
   if (callState.status !== 'idle') return;
   if (Math.random() * 100 >= Number(state.settings.callChance ?? 60)) return;
   let pool = state.roles.slice();
@@ -5870,6 +5935,8 @@ const APP_ICONS = {
   readbook: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>',
   /* 一起听：线条风耳机 */
   listen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><path d="M4 14a2 2 0 0 1 2-2h1v8H6a2 2 0 0 1-2-2Z"/><path d="M20 14a2 2 0 0 0-2-2h-1v8h1a2 2 0 0 0 2-2Z"/></svg>',
+  /* 一起睡觉：线条风月亮 + 星星 */
+  sleep: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.4 14.2A8.4 8.4 0 0 1 9.8 3.6 8.6 8.6 0 1 0 20.4 14.2Z"/><path d="M17.6 4.6l.5 1.4 1.4.5-1.4.5-.5 1.4-.5-1.4-1.4-.5 1.4-.5Z"/><path d="M8 2.4l.4 1.1 1.1.4-1.1.4L8 5.4l-.4-1.1-1.1-.4 1.1-.4Z"/></svg>',
   /* 提醒：线条风铃铛 */
   reminder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 16v-5a6 6 0 1 0-12 0v5l-2 2h16Z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>',
   /* 拾光瓶：线条风玻璃瓶（软木塞 + 瓶颈 + 瓶内一颗星） */
@@ -6885,6 +6952,7 @@ function musicScheduleBubble() {
   musicBubbleTimer = setTimeout(() => {
     musicBubbleTimer = null;
     if (!musicIsPlaying()) return;
+    if (sleepSilent()) return;  /* 睡觉中：TA 不在听歌气泡里说话 */
     if (currentRoute && currentRoute.page === 'sub' && currentRoute.name === 'listen') {
       const role = musicRole();
       const text = role ? (composeCardText(role.id) || '我在，慢慢听。') : '我在，慢慢听。';
@@ -9621,6 +9689,7 @@ function taSendRedPacket(roleId) {
 }
 
 function checkTaRedPackets() {
+  if (sleepSilent()) return;  /* 睡觉中：TA 不主动转账 */
   if (!state) return;
   const now = Date.now();
   if (!state.nextTaRedPacketAt) {
@@ -10151,13 +10220,26 @@ function renderAnniversaryPage() {
  * ========================================================= */
 function snapshotItemsFrom(msgs) {
   /* 已撤回的消息不进入留影：原消息本体在撤回后不可再出现在任何地方 */
-  return msgs.filter(m => !m.recalled && (m.role !== 'system' || m.type === 'call')).map(m => ({
-    role: m.role,
-    type: m.type || 'text',
-    content: m.type === 'redpacket' ? (m.blessing || '') : (m.content || ''),
-    image: m.image || '',
-    ts: m.ts || Date.now()
-  }));
+  return msgs.filter(m => !m.recalled && (m.role !== 'system' || m.type === 'call')).map(m => {
+    /* 语音消息富文本化：
+       TA 语音 → 读取藏在 text 字段里的字卡原文，显示「[语音] 原文」；
+       我方语音 → 真实录音没有对应文字，保留占位并带时长「[语音] N"」；
+       其余消息维持原来的 content 提取逻辑 */
+    let content = m.content || '';
+    if (m.type === 'voice-ta') {
+      const spoken = String(m.text || '').trim();
+      content = spoken ? '[语音] ' + spoken : '[语音] ' + Math.max(1, Math.round(Number(m.duration) || 1)) + '"';
+    } else if (m.type === 'voice-user') {
+      content = '[语音] ' + Math.max(1, Math.round(Number(m.duration) || 1)) + '"';
+    }
+    return {
+      role: m.role,
+      type: m.type || 'text',
+      content: m.type === 'redpacket' ? (m.blessing || '') : content,
+      image: m.image || '',
+      ts: m.ts || Date.now()
+    };
+  });
 }
 
 function randomSnapshotItems(roleId) {
@@ -10212,6 +10294,7 @@ function nextAutoSnapshotDelay() {
 }
 
 function checkAutoSnapshots() {
+  if (sleepSilent()) return;  /* 睡觉中：TA 不主动发起留影 */
   if (!state) return;
   const now = Date.now();
   if (!state.nextAutoSnapshotAt) {
@@ -11150,6 +11233,7 @@ function claimGift(roleId, msgId) {
 }
 
 function checkTaGifts() {
+  if (sleepSilent()) return;  /* 睡觉中：TA 不主动送礼 */
   if (!state) return;
   const now = Date.now();
   if (!state.nextTaGiftAt) {
@@ -11275,6 +11359,7 @@ function renderSub(name) {
     case 'games': return renderPlayPage();           /* 旧路由兜底：桌面小游戏已并入【一起玩】 */
     case 'readtogether': return renderReadTogetherPage();
     case 'listen': return renderListenPage();
+    case 'sleep': return renderSleepPage();          /* 一起睡觉：一起做 → 一起睡觉 的二级页 */
     case 'jar': return renderJarPage();
     case 'reading': return renderReadingPage();
     case 'readingroom': return renderReadingRoomPage();
@@ -13605,6 +13690,7 @@ function notifyLetterArrived(letter) {
 }
 
 function checkLetterReplies() {
+  if (sleepSilent()) return;  /* 睡觉中：TA 不回信（醒来后轮询自动继续，信不丢失） */
   if (!state || !Array.isArray(state.letters)) return;
   const now = Date.now();
   let changed = false;
@@ -13631,6 +13717,7 @@ function checkLetterReplies() {
  * 下次写信时间写在 state.nextAutoLetterAt，随 state 一起持久化（IndexedDB / localStorage）。
  * force = true 时忽略开关，用于手动测试。 */
 function checkAutoLetters(force) {
+  if (sleepSilent() && !force) return false;  /* 睡觉中：TA 不主动写信（手动测试 force 不受影响） */
   if (!state || !Array.isArray(state.letters)) return false;
   const st = state.settings;
   if (!st.letterAutoEnabled && !force) return false;
@@ -13719,13 +13806,13 @@ function renderLettersPage() {
         ${sliderRowHTML('写信间隔', '单位：分钟；下次写信时间会持久化，刷新后接着算', 'letterAutoInterval', s.letterAutoInterval, 1, 10080, '分钟')}
       </div>
       <div style="margin-top:14px;font-size:13px;font-weight:600">信件拼接设置（全局）</div>
-      <div class="muted" style="margin-top:2px">只需设置一次即可全局生效：你写信触发的回信、${esc(taName())}主动写来的信，正文都按这里的规则拼接字卡。</div>
+      <div class="muted" style="margin-top:2px">只需设置一次即可全局生效：你写信触发的回信、${esc(taName())}主动写来的信，正文都按这里的规则拼接字卡（最多 12 张）。</div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <select class="select" id="letterMergeMin" style="flex:1">
-          ${[1, 2, 3, 4, 5, 6].map(n => `<option value="${n}"${s.letterMergeMin === n ? ' selected' : ''}>最少 ${n} 张</option>`).join('')}
+          ${Array.from({ length: LETTER_MERGE_MAX }, (_, i) => i + 1).map(n => `<option value="${n}"${s.letterMergeMin === n ? ' selected' : ''}>最少 ${n} 张</option>`).join('')}
         </select>
         <select class="select" id="letterMergeMax" style="flex:1">
-          ${[1, 2, 3, 4, 5, 6].map(n => `<option value="${n}"${s.letterMergeMax === n ? ' selected' : ''}>最多 ${n} 张</option>`).join('')}
+          ${Array.from({ length: LETTER_MERGE_MAX }, (_, i) => i + 1).map(n => `<option value="${n}"${s.letterMergeMax === n ? ' selected' : ''}>最多 ${n} 张</option>`).join('')}
         </select>
       </div>
       <select class="select" id="letterMergeSep" style="margin-top:8px">${sepOpts}</select>
@@ -13793,8 +13880,8 @@ function renderLettersPage() {
     syncLetterAutoInputs();
   });
   const onLetterMergeChange = () => {
-    let lo = clamp(parseInt($('#letterMergeMin').value, 10) || 1, 1, 6);
-    let hi = clamp(parseInt($('#letterMergeMax').value, 10) || lo, 1, 6);
+    let lo = clamp(parseInt($('#letterMergeMin').value, 10) || 1, 1, LETTER_MERGE_MAX);
+    let hi = clamp(parseInt($('#letterMergeMax').value, 10) || lo, 1, LETTER_MERGE_MAX);
     if (lo > hi) hi = lo;
     state.settings.letterMergeMin = lo;
     state.settings.letterMergeMax = hi;
@@ -15134,7 +15221,7 @@ function startPomodoro() {
     if (pomo.speakAt && now >= pomo.speakAt && left > 0) {
       pomo.speakAt = now + randInt(3, 8) * 60000;
       const chance = Number(state.settings.pomodoroSpeakChance ?? 30);
-      if (Math.random() * 100 < chance) {
+      if (!sleepSilent() && Math.random() * 100 < chance) {  /* 睡觉中：TA 不做陪伴发言 */
         const role = pomoRole();
         if (role) updatePomoBubble(composeCardText(role.id) || '专心做你的事，我陪着你');
       }
@@ -17057,6 +17144,14 @@ function renderReadTogetherPage() {
       </div>
       <div class="arrow">›</div>
     </button>
+    <button class="rt-entry-card" data-rt-sleep>
+      <div class="ic">${APP_ICONS.sleep}</div>
+      <div class="txt">
+        <div class="t">一起睡觉</div>
+        <div class="d">${state.sleep && state.sleep.isSleeping ? '正在一起睡觉 · 点击查看' : '关掉灯，和 ' + roleName + ' 一起睡一会儿'}</div>
+      </div>
+      <div class="arrow">›</div>
+    </button>
     <div class="rt-more">更多一起做功能，敬请期待…</div>
   `);
   const entry = $('[data-rt-read]', body);
@@ -17073,6 +17168,427 @@ function renderReadTogetherPage() {
   /* 一起玩：进入二级子页面（三级结构：一起做 → 一起玩 → 五子棋） */
   const playEntry = $('[data-rt-play]', body);
   if (playEntry) playEntry.addEventListener('click', () => navigate({ page: 'sub', name: 'play' }));
+  /* 一起睡觉：进入睡眠主页（开始睡觉 + 历史记录） */
+  const sleepEntry = $('[data-rt-sleep]', body);
+  if (sleepEntry) sleepEntry.addEventListener('click', () => navigate({ page: 'sub', name: 'sleep' }));
+}
+
+/* =========================================================
+ * 二十三·六、一起睡觉
+ * 状态存在 state.sleep：
+ *   isSleeping / startTime / pendingSummary / pendingSleepData / history
+ * 刷新恢复：isSleeping → 直接回全屏遮罩；pendingSummary → 直接回结算卡片
+ * ========================================================= */
+const sleepEvents = {
+  action: [
+    "翻了个身，下意识地把你搂得更紧了。", "迷迷糊糊中伸手帮你掖了掖被角。",
+    "把脑袋埋进你的颈窝里，贪婪地蹭了蹭。", "在睡梦中轻轻拍着你的背，像在哄小孩。",
+    "抓住了你的手，十指紧扣后才继续安稳睡去。", "像只大型犬一样，霸道地把你整个人圈在怀里。",
+    "睡相不太好，一条腿直接压在了你身上。", "轻轻帮你把脸上碍事的碎发拨开。",
+    "半夜觉得有点冷，闭着眼睛往你怀里钻。", "无意识地凑过来，嘴唇擦过了你的耳畔。",
+    "把你抱得太紧，你稍微动了一下，他又迷迷糊糊地收紧手臂。", "手在你腰间轻轻摩挲了两下，像是在确认你还在。",
+    "睡梦中突然伸手摸向旁边，碰到你之后才放松下来。", "把被子全卷走了，过了一会儿又迷迷糊糊分给你一半。",
+    "下巴抵在你的头顶，把你抱得严严实实的。", "半梦半醒间轻轻捏了捏你的脸。",
+    "像是在找什么，最后把脸颊贴在了你的手心里。", "翻身的时候把你捞进怀里，发出一声满足的轻叹。",
+    "把你揽过去，在你的发顶亲了一下。", "两人在睡梦中不知不觉变成了面对面拥抱的姿势。"
+  ],
+  murmur: [
+    "说了句梦话，小声嘟囔着你的名字。", "迷迷糊糊地念叨了一句：“不要走……”",
+    "不知道梦到了什么，嘴角一直挂着笑。", "嘴里含糊不清地嘀咕了一句“好爱你”。",
+    "说了句梦话：“明天……带你去吃好吃的。”", "喉咙里发出一声很轻的、舒服的叹息。",
+    "低声说了句：“乖，别闹……” 然后把你抱得更紧了。", "嘟囔着：“怎么还不睡……” 明明自己已经睡熟了。",
+    "轻轻哼唧了一声，像在撒娇。", "说梦话吐槽：“这个笨蛋……” 语气却非常宠溺。",
+    "迷迷糊糊地叫着你的小名，声音又低又哑。", "嘀咕了一句：“冷……” 然后往你怀里缩了缩。",
+    "在梦里答应了一声：“嗯，我在。”", "极其小声地说了句：“好喜欢你。”",
+    "不知道梦见了什么，嘟囔着：“别抢我的……” ", "呼吸声中夹杂着几声无意义的黏糊鼻音。",
+    "嘴巴动了动，似乎想说什么，最后只是蹭了蹭枕头。", "说了一句：“盖好被子……”",
+    "低声呢喃：“终于抱到了。”", "半梦半醒地喊了一声：“老婆……”"
+  ],
+  inner: [
+    "呼吸非常平稳，睡得很沉、很安心。", "眉头微微皱起，不知道是不是梦见了什么着急的事。",
+    "睡梦中似乎感觉到了你在身边，嘴角微微上扬。", "呼吸声就在耳边，温热的气息打在你的皮肤上。",
+    "像是做了什么美梦，蹭了蹭枕头。", "虽然睡着了，但潜意识里依然保持着靠近你的姿势。",
+    "睡得很安静，只有在偶尔翻身时才会发出一点细微的声响。", "梦里似乎也有些紧张，下意识地抓住了你的衣角。",
+    "他身上的味道把你包围着，让人感到莫名的踏实。", "心跳声平缓而有力，隔着薄薄的睡衣传给你。",
+    "即使在深度睡眠中，身体也本能地护着你。", "眉头舒展，看起来像卸下了所有的防备。",
+    "平时总是很成熟的样子，睡着时却有种意外的乖巧感。", "呼吸的节奏偶尔和你同步，像是在梦里也陪着你。",
+    "似乎梦见了好天气，神色非常放松。", "身体微微蜷缩着，偏向你所在的方向。",
+    "嘴唇微微张开，毫无防备的样子。", "偶尔会像个小孩一样，在枕头上蹭两下。",
+    "睡得很熟，连你轻轻碰他，他都没有醒。", "仿佛因为有你在，连梦都是甜丝丝的。"
+  ],
+  watching: [
+    "半夜醒来了一次，在黑暗中静静地看了你好一会儿。", "悄悄凑过来，在你额头上落下了一个极轻的吻。",
+    "借着月光看着你的睡颜，忍不住轻抚了一下你的脸颊。", "把你抱在怀里，下巴抵在你的头顶，听着你的呼吸声发呆。",
+    "醒来帮你盖好被子，盯着你看了很久，才重新闭上眼。", "用手背轻轻碰了碰你的脸，低声说：“睡得真香。”",
+    "借着微弱的夜灯，数着你的睫毛。", "半夜醒了，没有动，只是安静地注视着你，眼神很温柔。",
+    "轻轻吻了吻你的鼻尖，然后轻笑了一声。", "看着你因为做梦而轻皱的眉头，伸手帮你抚平。",
+    "其实醒了很久，但为了不吵醒你，一直保持着同一个姿势看着你。", "帮你撩开脸颊的碎发，目光一直停留在你脸上。",
+    "安静地看了你一会儿，然后把你往怀里带了带，再次入睡。", "听着你细微的呼吸声，眼底全是藏不住的笑意。",
+    "偷偷用目光描摹了一遍你的五官。", "半夜醒来看着你，心里想着‘怎么这么可爱’。",
+    "在黑暗中摸索着找到你的手，放在唇边轻轻吻了一下。", "半夜醒来，静静地看着你，眼神比夜色还要温柔。",
+    "怕你冷，把你裹进怀里，顺便偷偷亲了一下你的发丝。", "看着你的睡姿，忍不住无声地笑了一下，然后用目光把你包围。"
+  ]
+};
+
+let sleepTickTimer = 0;
+
+function sleepRoleId() {
+  const cur = currentRoute && currentRoute.roleId;
+  if (cur && roleById(cur)) return cur;
+  if (state.activeRoleId && roleById(state.activeRoleId)) return state.activeRoleId;
+  return state.roles && state.roles[0] ? state.roles[0].id : '';
+}
+
+/* “X 小时 Y 分钟”：不足 1 分钟给友好文案，避免出现 0 小时 0 分钟 */
+function sleepDurationText(ms) {
+  const totalMin = Math.max(0, Math.round(Number(ms) / 60000));
+  if (totalMin <= 0) return '不到 1 分钟';
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h + ' 小时 ' + m + ' 分钟';
+}
+
+function sleepDayLabel(ts) {
+  const d = new Date(Number(ts) || 0);
+  if (isNaN(d.getTime())) return '';
+  return d.getFullYear() + ' 年 ' + (d.getMonth() + 1) + ' 月 ' + d.getDate() + ' 日';
+}
+
+function sleepElapsedMinutes() {
+  const st = Number(state.sleep && state.sleep.startTime) || 0;
+  return Math.max(0, Math.floor((Date.now() - st) / 60000));
+}
+
+/* 相邻两条睡眠事件的最小间隔：30 分钟，防止动作全挤在同一分钟里 */
+const SLEEP_EVENT_GAP_MS = 30 * 60 * 1000;
+
+/* 生成 TA 这一晚的睡眠时间轴：
+ * 次数由总时长决定：
+ *   短睡（< 60 分钟）→ 50% 触发 1 次，50% 一次都不触发；
+ *   正常睡眠（≥ 60 分钟）→ 目标 4~8 次；若该时长放不下这么多“30 分钟间隔”，
+ *   就把次数收缩到实际上限（宁可少几条，也绝不把事件挤在一起）。
+ * 长睡时间点分配：先为每两条之间预留 30 分钟，剩余空白均分成 N 段，
+ * 每段内随机取一个偏移量 —— 时间点天然递增，且相邻间隔一定 ≥ 30 分钟。 */
+function sleepBuildRecord(startTime, endTime) {
+  const start = Number(startTime) || Date.now();
+  const end = Math.max(start, Number(endTime) || start);
+  const span = end - start;
+  const durationMins = span / 60000;
+  const kinds = ['action', 'murmur', 'inner', 'watching'];
+  const timeline = [];
+  const pushEvent = ts => {
+    const kind = pickOne(kinds);
+    timeline.push({
+      ts: clamp(Math.round(ts), start, end),
+      kind,
+      text: pickOne(sleepEvents[kind])
+    });
+  };
+
+  if (durationMins < 60) {
+    /* 短睡 / 午睡：一半概率完全安静，一半概率只有 1 条，且在入睡~起床之间随机落点 */
+    if (span > 0 && Math.random() < 0.5) pushEvent(start + Math.random() * span);
+  } else {
+    const wanted = randInt(4, 8);
+    /* 这个时长最多能容纳几个“间隔 ≥ 30 分钟”的事件 */
+    const maxFit = Math.floor(span / SLEEP_EVENT_GAP_MS) + 1;
+    const count = Math.max(1, Math.min(wanted, maxFit));
+    const lane = span - (count - 1) * SLEEP_EVENT_GAP_MS;   /* 预留固定间隔后剩下的可随机空白 */
+    const slot = lane / count;
+    for (let i = 0; i < count; i++) {
+      pushEvent(start + i * SLEEP_EVENT_GAP_MS + (i + Math.random()) * slot);
+    }
+    timeline.sort((a, b) => a.ts - b.ts);
+  }
+
+  return {
+    id: uid(),
+    roleId: sleepRoleId(),
+    startTime: start,
+    endTime: end,
+    duration: span,
+    timeline
+  };
+}
+
+/* ---------------- 全屏睡眠遮罩 ---------------- */
+function ensureSleepOverlay() {
+  let ov = $('#sleep-overlay');
+  if (ov) return ov;
+  const role = roleById(sleepRoleId()) || {};
+  const meAvatar = state.my && state.my.avatar ? state.my.avatar : '';
+  ov = document.createElement('div');
+  ov.id = 'sleep-overlay';
+  ov.className = 'hidden';
+  ov.innerHTML = `
+    <div class="sl-sky"><i></i><i></i><i></i></div>
+    <div class="sl-body">
+      <div class="sl-avatars">
+        <div class="sl-av">${roleAvatarHTML(role, 92)}</div>
+        <div class="sl-av">${avatarHTML(meAvatar, 92)}</div>
+      </div>
+      <div class="sl-title">你们正在一起睡觉…</div>
+      <div class="sl-elapsed" id="sleepElapsed">00:00:00</div>
+    </div>
+    <button class="sl-wake" id="sleepWakeBtn" type="button">我醒了</button>
+  `;
+  document.body.appendChild(ov);
+  $('#sleepWakeBtn', ov).addEventListener('click', () => wakeUpSleep());
+  return ov;
+}
+
+function sleepTickStart() {
+  sleepTickStop();
+  const update = () => {
+    const el = $('#sleepElapsed');
+    if (!el) return;
+    const st = Number(state.sleep && state.sleep.startTime) || 0;
+    const sec = Math.max(0, Math.floor((Date.now() - st) / 1000));
+    el.textContent = pad2(Math.floor(sec / 3600)) + ':' + pad2(Math.floor(sec / 60) % 60) + ':' + pad2(sec % 60);
+  };
+  update();
+  sleepTickTimer = setInterval(update, 1000);
+}
+
+function sleepTickStop() {
+  if (sleepTickTimer) { clearInterval(sleepTickTimer); sleepTickTimer = 0; }
+}
+
+function showSleepOverlay() {
+  const ov = ensureSleepOverlay();
+  ov.classList.remove('hidden');
+  sleepTickStart();
+}
+
+function hideSleepOverlay() {
+  const ov = $('#sleep-overlay');
+  if (ov) ov.classList.add('hidden');
+  sleepTickStop();
+}
+
+/* ---------------- 结算卡片 ---------------- */
+function showSleepSummary() {
+  const rec = state.sleep && state.sleep.pendingSleepData;
+  if (!rec) return;
+  let m = $('#sleep-summary-modal');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'sleep-summary-modal';
+    m.className = 'sl-modal hidden';
+    document.body.appendChild(m);
+  }
+  m.innerHTML = `
+    <div class="sl-modal-mask"></div>
+    <div class="sl-sum-card">
+      <div class="sl-sum-icon">${APP_ICONS.sleep}</div>
+      <div class="sl-sum-text">你们一共一起睡了<br><b>${esc(sleepDurationText(rec.duration))}</b></div>
+      <button class="sl-primary" id="sleepViewTimeline" type="button">查看 TA 的睡眠记录</button>
+    </div>
+  `;
+  m.classList.remove('hidden');
+  $('#sleepViewTimeline', m).addEventListener('click', () => {
+    /* 结算卡 → 时间轴：清 pendingSummary，pendingSleepData 留到「保存并退出」再入历史 */
+    state.sleep.pendingSummary = false;
+    persist();
+    m.classList.add('hidden');
+    openSleepTimeline(rec, false);
+  });
+}
+
+/* ---------------- 睡眠时间轴弹窗 ---------------- */
+function openSleepTimeline(rec, isHistory) {
+  if (!rec) return;
+  let m = $('#sleep-timeline-modal');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'sleep-timeline-modal';
+    m.className = 'sl-modal hidden';
+    document.body.appendChild(m);
+  }
+  const items = (rec.timeline || []).map(x => `
+    <div class="sl-tl-item">
+      <div class="sl-tl-time">${esc(fmtClock(x.ts))}</div>
+      <div class="sl-tl-rail"><i class="sl-tl-dot kind-${esc(x.kind)}"></i></div>
+      <div class="sl-tl-text">${esc(x.text)}</div>
+    </div>`).join('');
+  m.innerHTML = `
+    <div class="sl-modal-mask"></div>
+    <div class="sl-tl-card">
+      <div class="sl-tl-head">
+        <div class="sl-tl-title">TA 的睡眠记录</div>
+        <div class="sl-tl-sub">${esc(sleepDayLabel(rec.startTime))} · ${esc(fmtClock(rec.startTime))} - ${esc(fmtClock(rec.endTime))} · ${esc(sleepDurationText(rec.duration))}</div>
+      </div>
+      <div class="sl-timeline${items ? '' : ' is-calm'}">${items || `
+        <div class="sl-calm">
+          <div class="sl-calm-title">这一觉，你们睡得很安稳。</div>
+          <div class="sl-calm-sub">没有发生什么特别的事，只是静静地依偎在一起。</div>
+        </div>`}</div>
+      <button class="sl-primary" id="sleepTimelineDone" type="button">${isHistory ? '关闭' : '保存并退出'}</button>
+    </div>
+  `;
+  m.classList.remove('hidden');
+  $('#sleepTimelineDone', m).addEventListener('click', () => {
+    m.classList.add('hidden');
+    if (isHistory) return;
+    sleepSaveRecord(rec);
+    /* 返回「一起睡觉」主页 */
+    if (currentRoute.page === 'sub' && currentRoute.name === 'sleep') renderSleepPage();
+    else navigate({ page: 'sub', name: 'sleep' });
+  });
+}
+
+/* 保存本次睡眠到历史（同一 id 只存一次，最多保留 100 条） */
+function sleepSaveRecord(rec) {
+  const sl = state.sleep;
+  if (!rec || !sl) return;
+  if (!(sl.history || []).some(x => x.id === rec.id)) sl.history.unshift(rec);
+  if (sl.history.length > 100) sl.history.length = 100;
+  sl.pendingSleepData = null;
+  sl.pendingSummary = false;
+  sl.isSleeping = false;
+  persist(true);
+}
+
+/* ---------------- 开始睡觉 / 我醒了 ---------------- */
+function startSleep() {
+  const sl = state.sleep;
+  if (sl.isSleeping) { showSleepOverlay(); return; }
+  sl.startTime = Date.now();
+  sl.isSleeping = true;
+  sl.pendingSummary = false;
+  sl.pendingSleepData = null;
+  persist(true);
+  showSleepOverlay();
+}
+
+function wakeUpSleep() {
+  const sl = state.sleep;
+  if (!sl || !sl.isSleeping) { hideSleepOverlay(); return; }
+  const start = Number(sl.startTime) || Date.now();
+  const end = Math.max(start, Date.now());
+  const rec = sleepBuildRecord(start, end);
+  sl.isSleeping = false;
+  sl.pendingSleepData = rec;
+  sl.pendingSummary = true;
+  persist(true);
+  hideSleepOverlay();
+  showSleepSummary();
+}
+
+/* 刷新 / 冷启动恢复：进行中 → 遮罩；待结算 → 结算卡 */
+function sleepRestoreOnBoot() {
+  const sl = state.sleep;
+  if (!sl) return;
+  if (sl.isSleeping && sl.startTime) { showSleepOverlay(); return; }
+  if (sl.pendingSummary && sl.pendingSleepData) { showSleepSummary(); }
+}
+
+/* ---------------- 定时自动睡觉 ----------------
+ * 由 boot 的全局轮询驱动（启动即查一次 + 每 15 秒一次，分钟级判断绰绰有余）：
+ *   1. 开关关闭 / 正在睡觉 → 直接跳过；
+ *   2. 当前本地时间在"设定时间之后 5 分钟窗口内"，且今天还没触发过 → 立即强制入睡；
+ *      用窗口而非严格等号，防止用户刚好在那一分钟切后台 / 锁屏，回来就错过；
+ *   3. 触发后记录 lastSleepTriggerDate（持久化），当天同一时间点绝不重复触发；
+ *   4. 设定时间早于当前时间（如 23:00 设了 22:00）：今天剩余时间已超窗口，
+ *      自然顺延到明天 22:00 才触发 —— 无需任何额外日期计算；
+ *   5. 复用 startSleep()：与手动点「开始睡觉」完全同一条链路（置位 isSleeping + 持久化 +
+ *      弹全屏遮罩），睡眠静默拦截 sleepSilent() 自动生效，刷新后 sleepRestoreOnBoot 继续锁定。 */
+const SLEEP_SCHEDULE_GRACE_MS = 5 * 60 * 1000;   /* 错过窗口：5 分钟 */
+function checkSleepSchedule() {
+  if (!state || !state.settings) return;
+  if (state.settings.sleepScheduleEnabled !== true) return;
+  if (state.sleep && state.sleep.isSleeping) return;
+  const want = String(state.settings.sleepScheduleTime || '');
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(want)) return;
+  const d = new Date();
+  const today = todayKey();
+  if (state.lastSleepTriggerDate === today) return;   /* 今天已经触发过了，不再试 */
+  const [h, m] = want.split(':').map(Number);
+  const targetTs = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m, 0, 0).getTime();
+  const diff = d.getTime() - targetTs;
+  if (diff < 0) return;                                    /* 还没到设定时间 */
+  if (diff > SLEEP_SCHEDULE_GRACE_MS) return;              /* 窗口已过：等到明天 */
+  state.lastSleepTriggerDate = today;
+  persist(true);
+  startSleep();
+}
+
+/* ---------------- 一起睡觉主页 ---------------- */
+function renderSleepPage() {
+  const roleId = sleepRoleId();
+  const roleName = esc(taName(roleId));
+  const sl = state.sleep || { history: [] };
+  const sleeping = !!sl.isSleeping;
+  const hist = (sl.history || []).slice(0, 40);
+  const body = subShell('一起睡觉', `
+    <div class="sl-page">
+      <div class="sl-hero">
+        <div class="sl-hero-icon">${APP_ICONS.sleep}</div>
+        <div class="sl-hero-title">${sleeping ? '你们正在一起睡觉…' : '和 ' + roleName + ' 一起睡一会儿'}</div>
+        <div class="sl-hero-desc">${sleeping ? '已经睡了 ' + sleepElapsedMinutes() + ' 分钟' : '关掉灯，靠着彼此慢慢睡着'}</div>
+        <button class="sl-primary sl-start-btn" data-sl-start type="button"${sleeping ? ' disabled' : ''}>${sleeping ? '正在睡觉中…' : '开始睡觉'}</button>
+      </div>
+      <div class="sl-hist-head">历史睡眠记录</div>
+      <div class="sl-set">
+        <div class="sl-set-row">
+          <div class="sl-set-title">定时睡眠</div>
+          <label class="switch"><input type="checkbox" id="slSchedToggle" ${state.settings.sleepScheduleEnabled ? 'checked' : ''}><span class="slider"></span></label>
+        </div>
+        <div class="sl-set-time">
+          <input type="time" id="slSchedTime" value="${esc(state.settings.sleepScheduleTime)}" step="60">
+          <span class="sl-set-timezone">每天到点自动入睡</span>
+        </div>
+        <div class="sl-set-hint">到达设定时间后，将强制进入睡眠模式，必须点击【我醒了】才能解锁。</div>
+      </div>
+      ${hist.length ? `<div class="sl-hist">${hist.map(r => `
+        <button class="sl-hist-item" data-sl-hist="${esc(r.id)}" type="button">
+          <div class="sl-hist-ic">${APP_ICONS.sleep}</div>
+          <div class="sl-hist-main">
+            <div class="sl-hist-date">${esc(sleepDayLabel(r.startTime))}</div>
+            <div class="sl-hist-dur">${esc(fmtClock(r.startTime))} - ${esc(fmtClock(r.endTime))} · ${esc(sleepDurationText(r.duration))}</div>
+          </div>
+          <div class="arrow">›</div>
+        </button>`).join('')}</div>`
+      : '<div class="sl-empty">还没有睡眠记录，今晚一起睡一觉吧。</div>'}
+    </div>
+  `);
+  /* 防御：subShell 万一没返回容器（极端情况），也不抛出 null 属性访问错误 */
+  if (body) {
+    const startBtn = $('[data-sl-start]', body);
+    if (startBtn) startBtn.addEventListener('click', () => startSleep());
+    $$('[data-sl-hist]', body).forEach(b => b.addEventListener('click', () => {
+      const rec = (state.sleep.history || []).find(x => x.id === b.dataset.slHist);
+      if (rec) openSleepTimeline(rec, true);
+    }));
+    /* 定时睡眠设置：开关与时间实时保存；关闭时时间选择器置灰 */
+    const schedToggle = $('#slSchedToggle', body);
+    const schedTime = $('#slSchedTime', body);
+    const syncSchedUI = () => {
+      const on = !!(schedToggle && schedToggle.checked);
+      if (schedTime) schedTime.disabled = !on;
+      $$('.sl-set-time', body).forEach(el => el.classList.toggle('sl-set-off', !on));
+    };
+    if (schedToggle) schedToggle.addEventListener('change', () => {
+      state.settings.sleepScheduleEnabled = schedToggle.checked;
+      /* 开启时若时间非法，回落 23:30，保证一定有可触发时间 */
+      if (schedToggle.checked && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(state.settings.sleepScheduleTime || ''))) {
+        state.settings.sleepScheduleTime = '23:30';
+        if (schedTime) schedTime.value = '23:30';
+      }
+      persist(true);
+      syncSchedUI();
+    });
+    if (schedTime) schedTime.addEventListener('change', () => {
+      const v = String(schedTime.value || '');
+      if (/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) {
+        state.settings.sleepScheduleTime = v;
+        persist(true);
+      } else {
+        schedTime.value = state.settings.sleepScheduleTime || '23:30';
+      }
+    });
+    syncSchedUI();
+  }
 }
 
 /* ---------- 【一起读书】主界面 ---------- */
@@ -17990,6 +18506,7 @@ function rejectReadInvite(roleId, msgId) {
 
 /* 全局判定：TA 按「主动邀请共读概率」发起邀请（复用主动消息的定时检查框架） */
 function checkTaReadInvite() {
+  if (sleepSilent()) return;  /* 睡觉中：TA 不主动邀请共读 */
   if (!state || !state.readData) return;
   const now = Date.now();
   if (!state.nextTaReadInviteAt) {
@@ -18290,6 +18807,7 @@ function welcomeMissedReminderCount(seenAt, now) {
  * overdueTodoCount = 这段时间内到期且仍未完成的待办 + 这段时间内错过的日常提醒
  * 两者都为 0 时不显示横幅 */
 function checkOfflineEvents() {
+  if (sleepSilent()) return;  /* 睡觉中：不结算离线消息横幅，醒来后自然补查 */
   if (!state) return;
   const el = $('#welcome-banner');
   if (!el) return;
@@ -18563,6 +19081,11 @@ async function boot() {
   checkTodoReminders(); /* 页面加载完成时立刻补查一次错过的待办提醒 */
   /* 离线消息补发：结算上次离开后新产生的 TA 消息与超时待办，显示顶部纯文本横幅 */
   checkOfflineEvents();
+  /* 定时自动睡眠：冷启动时立刻查一次，可能用户设了 23:30、当前就是 23:30 */
+  try { checkSleepSchedule(); } catch (e) { console.warn('[sleep] 定时睡眠检查失败，已跳过：', e); }
+  /* 一起睡觉：刷新前正在睡 → 直接回到全屏遮罩；刷新前刚醒未看结算 → 直接回到结算卡。
+     用 try-catch 兜住：睡眠功能出现任何异常都不允许阻塞首屏（Loading 必须照常关闭） */
+  try { sleepRestoreOnBoot(); } catch (e) { console.warn('[sleep] 恢复状态失败，已跳过：', e); }
   /* 24h 退回检查：延迟到 UI 渲染与全部事件绑定完成之后执行，绝不阻塞基础交互 */
   setTimeout(() => { try { checkExpiredTransactions(); } catch (e) { /* 忽略 */ } }, 800);
   setInterval(() => {
@@ -18578,6 +19101,7 @@ async function boot() {
     checkTaReadInvite();
     checkTodoReminders();
     try { checkExpiredTransactions(); } catch (e) { /* 容错：单次异常不影响后续轮询与其它任务 */ }
+    try { checkSleepSchedule(); } catch (e) { /* 容错 */ }
   }, 15000);
 
   /* 刷新后若保活开关为开启：浏览器通常会在无手势时拦截播放，
@@ -18594,6 +19118,7 @@ async function boot() {
       checkTodoReminders(); /* 切后台期间错过的待办提醒，回前台立即补发 */
       checkLetterReplies(); /* 切后台期间到期的回信 */
       checkAutoLetters();   /* 时间戳已过期则立刻补发主动来信 */
+      try { checkSleepSchedule(); } catch (e) { /* 切后台期间可能刚好过了定时点，回前台补查 */ }
       /* 全部补查完成后再结算离线事件：这样补发出来的 TA 消息也会被计入横幅 */
       checkOfflineEvents();
     }
@@ -18638,10 +19163,20 @@ function runSplash() {
 /* 立即启动开屏动画；defer 加载保证此时 DOM 已就绪 */
 runSplash();
 
-/* 页面加载完成即启动：DOMContentLoaded 后立刻补查一次主动来信等任务，刷新不丢 */
+/* 页面加载完成即启动：DOMContentLoaded 后立刻补查一次主动来信等任务，刷新不丢。
+   用 safeBoot 包一层：初始化里任何一处抛异常（含一起睡觉等新功能）都只记录日志，
+   绝不让异常外泄 —— 开屏动画由 runSplash 独立计时，因此桌面一定能进入 */
+function safeBoot() {
+  try {
+    const p = boot();
+    if (p && typeof p.catch === 'function') p.catch(e => console.error('[boot] 初始化失败：', e));
+  } catch (e) {
+    console.error('[boot] 初始化失败：', e);
+  }
+}
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', boot, { once: true });
+  document.addEventListener('DOMContentLoaded', safeBoot, { once: true });
 } else {
-  boot();
+  safeBoot();
 }
 
