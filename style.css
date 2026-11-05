@@ -4014,7 +4014,9 @@ body.voice-recording *{
 }
 .sl-set-time input[type="time"]:focus{border-color:var(--primary);background:#fff;}
 .sl-set-timezone{font-size:11.5px;color:var(--sub);}
-.sl-set-hint{font-size:11.5px;color:#b0b4bc;line-height:1.6;}
+.sl-set-hint{font-size:11.5px;color:#a8adb7;line-height:1.6;}
+/* 夜间 / 午睡两组之间的细分隔线 */
+.sl-set-divider{height:1px;background:var(--line);margin:2px 0;}
 /* 定时睡眠关闭时：时间选择器整块置灰，提示用户当前不生效 */
 .sl-set-time.sl-set-off{opacity:.45;pointer-events:none;}
 .sl-set-time.sl-set-off input[type="time"]{background:#f2f4f7;color:#b0b4bc;}

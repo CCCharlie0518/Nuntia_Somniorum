@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.7.0';
+const APP_VERSION = 'v8.7.1';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -656,9 +656,11 @@ function defaultState() {
       spaceProactiveChance: 15,
       spaceProactiveMin: 30,
       spaceProactiveMax: 90,
-      /* 定时睡眠：到点自动强制进入睡眠遮罩（ HH:mm，本地时区） */
-      sleepScheduleEnabled: false,
-      sleepScheduleTime: '23:30'
+      /* 定时强制睡眠：夜间 / 午睡两组独立设置（HH:mm，本地时区） */
+      nightSleepEnabled: false,
+      nightSleepTime: '23:30',
+      noonSleepEnabled: false,
+      noonSleepTime: '13:00'
     },
     nextProactiveAt: 0,
     nextSpaceProactiveAt: 0,
@@ -991,11 +993,17 @@ function mergeState(saved) {
     out.sleep = { isSleeping: false, startTime: 0, pendingSummary: false, pendingSleepData: null, history: [] };
   }
   out.nextTaReadInviteAt = Number(out.nextTaReadInviteAt) || 0;
-  /* 定时睡眠：开关布尔化 + 时间必须为合法 HH:mm；当日已触发标记随 state 持久化（防重复触发） */
-  out.settings.sleepScheduleEnabled = out.settings.sleepScheduleEnabled === true;
-  const slTime = String(out.settings.sleepScheduleTime || '');
-  out.settings.sleepScheduleTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(slTime) ? slTime : '23:30';
-  out.lastSleepTriggerDate = typeof out.lastSleepTriggerDate === 'string' ? out.lastSleepTriggerDate.slice(0, 10) : '';
+  /* 定时强制睡眠：夜间 / 午睡两组的开关与时间做白名单化；兼容旧版单一定时字段 */
+  const slTimeOK = t => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(t || ''));
+  const legacyNightOn = out.settings.sleepScheduleEnabled === true;
+  const legacyNightTime = slTimeOK(out.settings.sleepScheduleTime) ? String(out.settings.sleepScheduleTime) : '';
+  out.settings.nightSleepEnabled = (out.settings.nightSleepEnabled === true) || (out.settings.nightSleepEnabled == null && legacyNightOn);
+  out.settings.nightSleepTime = slTimeOK(out.settings.nightSleepTime) ? String(out.settings.nightSleepTime) : (legacyNightTime || '23:30');
+  out.settings.noonSleepEnabled = out.settings.noonSleepEnabled === true;
+  out.settings.noonSleepTime = slTimeOK(out.settings.noonSleepTime) ? String(out.settings.noonSleepTime) : '13:00';
+  /* 两组独立记录“今天是否已触发”，刷新 / 关掉网页再回来都不会重复触发 */
+  out.lastNightTriggerDate = typeof out.lastNightTriggerDate === 'string' ? out.lastNightTriggerDate.slice(0, 10) : '';
+  out.lastNoonTriggerDate = typeof out.lastNoonTriggerDate === 'string' ? out.lastNoonTriggerDate.slice(0, 10) : '';
   /* 一起听：只持久化歌名 / 唱片图 / 播放模式 / 歌单元数据；
      音频本身以 Blob URL 存在运行时，绝不写入 localStorage（刷新后由用户重新上传） */
   const musicSrc = (src.music && typeof src.music === 'object') ? src.music : {};
@@ -17264,11 +17272,13 @@ const SLEEP_EVENT_GAP_MS = 30 * 60 * 1000;
 
 /* 生成 TA 这一晚的睡眠时间轴：
  * 次数由总时长决定：
- *   短睡（< 60 分钟）→ 50% 触发 1 次，50% 一次都不触发；
- *   正常睡眠（≥ 60 分钟）→ 目标 4~8 次；若该时长放不下这么多“30 分钟间隔”，
- *   就把次数收缩到实际上限（宁可少几条，也绝不把事件挤在一起）。
- * 长睡时间点分配：先为每两条之间预留 30 分钟，剩余空白均分成 N 段，
- * 每段内随机取一个偏移量 —— 时间点天然递增，且相邻间隔一定 ≥ 30 分钟。 */
+ *   < 30 分钟（极短）      → 只生成 1 条，放在睡眠正中间；
+ *   30~60 分钟（标准午休） → 1~2 条；
+ *   ≥ 60 分钟（长睡眠）    → 4~8 条。
+ * 数量上限：最多 Math.floor(总时长 / 30) + 1 条（时长决定的物理上限，超出必然挤在一起）。
+ * 时间点生成：随机打点 + 30 分钟硬校验 —— 新点与已有点差值 < 30 分钟立即丢弃重试；
+ * 每个点最多尝试 100 次，仍塞不下就停止（绝不陷入死循环、也绝不生成过密的时间点）。
+ * 最终时间戳统一从小到大排序。 */
 function sleepBuildRecord(startTime, endTime) {
   const start = Number(startTime) || Date.now();
   const end = Math.max(start, Number(endTime) || start);
@@ -17276,6 +17286,7 @@ function sleepBuildRecord(startTime, endTime) {
   const durationMins = span / 60000;
   const kinds = ['action', 'murmur', 'inner', 'watching'];
   const timeline = [];
+  const midTime = start + span / 2;   /* 只能有 1 条时：放在整段睡眠的正中间 */
   const pushEvent = ts => {
     const kind = pickOne(kinds);
     timeline.push({
@@ -17284,23 +17295,37 @@ function sleepBuildRecord(startTime, endTime) {
       text: pickOne(sleepEvents[kind])
     });
   };
-
-  if (durationMins < 60) {
-    /* 短睡 / 午睡：一半概率完全安静，一半概率只有 1 条，且在入睡~起床之间随机落点 */
-    if (span > 0 && Math.random() < 0.5) pushEvent(start + Math.random() * span);
-  } else {
-    const wanted = randInt(4, 8);
-    /* 这个时长最多能容纳几个“间隔 ≥ 30 分钟”的事件 */
-    const maxFit = Math.floor(span / SLEEP_EVENT_GAP_MS) + 1;
-    const count = Math.max(1, Math.min(wanted, maxFit));
-    const lane = span - (count - 1) * SLEEP_EVENT_GAP_MS;   /* 预留固定间隔后剩下的可随机空白 */
-    const slot = lane / count;
+  /* 打点并校验：与已生成的所有时间点相距不足 30 分钟就丢弃重试 */
+  const MIN_GAP = SLEEP_EVENT_GAP_MS;
+  const placePoints = count => {
+    const times = [];
     for (let i = 0; i < count; i++) {
-      pushEvent(start + i * SLEEP_EVENT_GAP_MS + (i + Math.random()) * slot);
+      let placed = false;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const ts = start + Math.random() * span;
+        if (times.every(t => Math.abs(t - ts) >= MIN_GAP)) {
+          times.push(ts);
+          placed = true;
+          break;
+        }
+      }
+      /* 试了 100 次仍无位置：直接收手，用现有的时间点 */
+      if (!placed) break;
     }
-    timeline.sort((a, b) => a.ts - b.ts);
-  }
+    times.sort((a, b) => a - b).forEach(pushEvent);
+  };
 
+  if (durationMins < 30) {
+    /* 总时长不足 30 分钟：只放 1 条，且固定在睡眠正中间 */
+    pushEvent(midTime);
+  } else {
+    const desired = durationMins < 60 ? randInt(1, 2) : randInt(4, 8);
+    /* 该时长下最多能容纳几个“间隔 ≥ 30 分钟”的事件 */
+    const maxPossibleEvents = Math.floor(durationMins / 30) + 1;
+    const count = Math.max(1, Math.min(desired, maxPossibleEvents));
+    if (count <= 1) pushEvent(midTime);
+    else placePoints(count);
+  }
   return {
     id: uid(),
     roleId: sleepRoleId(),
@@ -17483,34 +17508,118 @@ function sleepRestoreOnBoot() {
   if (sl.pendingSummary && sl.pendingSleepData) { showSleepSummary(); }
 }
 
-/* ---------------- 定时自动睡觉 ----------------
- * 由 boot 的全局轮询驱动（启动即查一次 + 每 15 秒一次，分钟级判断绰绰有余）：
- *   1. 开关关闭 / 正在睡觉 → 直接跳过；
- *   2. 当前本地时间在"设定时间之后 5 分钟窗口内"，且今天还没触发过 → 立即强制入睡；
- *      用窗口而非严格等号，防止用户刚好在那一分钟切后台 / 锁屏，回来就错过；
- *   3. 触发后记录 lastSleepTriggerDate（持久化），当天同一时间点绝不重复触发；
- *   4. 设定时间早于当前时间（如 23:00 设了 22:00）：今天剩余时间已超窗口，
- *      自然顺延到明天 22:00 才触发 —— 无需任何额外日期计算；
- *   5. 复用 startSleep()：与手动点「开始睡觉」完全同一条链路（置位 isSleeping + 持久化 +
- *      弹全屏遮罩），睡眠静默拦截 sleepSilent() 自动生效，刷新后 sleepRestoreOnBoot 继续锁定。 */
-const SLEEP_SCHEDULE_GRACE_MS = 5 * 60 * 1000;   /* 错过窗口：5 分钟 */
-function checkSleepSchedule() {
-  if (!state || !state.settings) return;
-  if (state.settings.sleepScheduleEnabled !== true) return;
-  if (state.sleep && state.sleep.isSleeping) return;
-  const want = String(state.settings.sleepScheduleTime || '');
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(want)) return;
+/* ---------------- 定时强制睡眠（夜间 / 午睡 两条独立定时器） ----------------
+ * 由 boot 的全局轮询驱动（启动即查一次 + 每 15 秒一次）：
+ *   1. 两组各自判断：开关关闭 → 跳过；只取“最近一次已到达的设定时刻”（今天没到点则取昨天），
+ *      因此设定时间早于当前时间（23:00 设了 22:00）当天不会触发，自然顺延到明天；
+ *   2. 前台在 5 分钟窗口内 → 直接 startSleep() 弹全屏遮罩；
+ *      后台（document.hidden）给 60 分钟窗口 → 发系统通知，并记下待弹标记；
+ *      用户点通知 / 切回网页 → visibilitychange 补查 → 立刻补弹遮罩；
+ *   3. 触发后在 state 里记 lastNightTriggerDate / lastNoonTriggerDate（持久化），
+ *      同一天同一组绝不重复触发；两组互不干扰；
+ *   4. 复用 startSleep()：置位 isSleeping + 持久化 + 弹遮罩，sleepSilent() 拦截自动生效，
+ *      刷新后 sleepRestoreOnBoot 继续锁定（不点【我醒了】关掉网页也逃不掉）；
+ *   5. 关掉网页时 lastNightTriggerDate 只是“昨天”，第二天到点重新触发。 */
+const SLEEP_SCHEDULE_GRACE_MS = 5 * 60 * 1000;        /* 前台错过窗口：5 分钟 */
+const SLEEP_SCHEDULE_BG_GRACE_MS = 60 * 60 * 1000;    /* 后台错过窗口：60 分钟（期间可能被系统冻结） */
+/* 后台已到点、但当时没弹遮罩：等页面回到前台立刻补弹（通知点回来也走这条） */
+let sleepAutoPending = false;
+
+function sleepDayKey(d) {
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+}
+
+/* 开启开关时请求系统通知权限（不支持 / 已拒绝都静默跳过，不影响睡眠本身） */
+function requestSleepNotifyPermission() {
+  try {
+    if (typeof Notification === 'undefined') return;
+    if (Notification.permission !== 'default') return;
+    const p = Notification.requestPermission();
+    if (p && typeof p.then === 'function') p.then(() => {}).catch(() => {});
+  } catch (e) { console.warn('[sleep] 通知权限请求失败：', e); }
+}
+
+/* 后台到点：发一条系统通知（标题/内容按夜间、午睡区分） */
+function showSleepAutoNotification(kind) {
+  try {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    const isNight = kind === 'night';
+    const n = new Notification(isNight ? '该睡觉啦 🌙' : '午休时间到 ☀️', {
+      body: isNight ? '夜深了，快回到你们的卧室一起入睡吧。' : '放下手头的事，和他一起小憩一会儿吧。',
+      tag: 'sleep-auto-' + kind,
+      renotify: true
+    });
+    n.onclick = () => {
+      try { window.focus(); } catch (e) { /* 某些浏览器前台不允许 focus，忽略 */ }
+      try { n.close(); } catch (e) {}
+      sleepAutoPending = true;
+      /* 点击后页面已经回到前台：立刻补弹遮罩；仍在后台则等 visibilitychange */
+      if (document.visibilityState === 'visible') {
+        sleepAutoPending = false;
+        startSleep();
+      }
+    };
+  } catch (e) { console.warn('[sleep] 系统通知发送失败：', e); }
+}
+
+/* 单组定时判定：night / noon 完全独立，互不干扰 */
+function checkOneSleepSchedule(cfg, grace) {
+  if (cfg.enabled !== true) return;
+  const want = String(cfg.time || '');
+  const hm = /^([01]\d|2[0-3]):[0-5]\d$/.exec(want);
+  if (!hm) return;
   const d = new Date();
-  const today = todayKey();
-  if (state.lastSleepTriggerDate === today) return;   /* 今天已经触发过了，不再试 */
-  const [h, m] = want.split(':').map(Number);
-  const targetTs = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m, 0, 0).getTime();
-  const diff = d.getTime() - targetTs;
-  if (diff < 0) return;                                    /* 还没到设定时间 */
-  if (diff > SLEEP_SCHEDULE_GRACE_MS) return;              /* 窗口已过：等到明天 */
-  state.lastSleepTriggerDate = today;
+  /* 取“最近一次已到达的设定时刻”：今天没到点就回退到昨天，diff 永远 ≥ 0 */
+  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate(), Number(hm[1]), Number(hm[2]), 0, 0);
+  if (target.getTime() > d.getTime()) target.setDate(target.getDate() - 1);
+  const diff = d.getTime() - target.getTime();
+  if (diff > grace) return;                       /* 已超出窗口：等下一个周期 */
+  const dayKey = sleepDayKey(target);
+  if (state[cfg.lastKey] === dayKey) return;      /* 这一天已经触发过，绝不重复 */
+  state[cfg.lastKey] = dayKey;
   persist(true);
-  startSleep();
+  if (document.visibilityState === 'visible') {
+    startSleep();                                 /* 情况 A：前台，直接强制入睡 */
+  } else {
+    sleepAutoPending = true;                      /* 情况 B：后台，通知 + 回来补弹 */
+    showSleepAutoNotification(cfg.kind);
+  }
+}
+
+/* 上一次定时检查的时间：用于识别“定时器被浏览器冻结”的间隔 */
+let sleepSchedLastTick = Date.now();
+
+function checkSleepSchedules() {
+  if (!state || !state.settings) return;
+  const now = Date.now();
+  const gap = now - sleepSchedLastTick;
+  sleepSchedLastTick = now;
+  /* 在后台、或两次检查间隔异常大（定时器被冻结 / 页面被挂起过）→ 用 60 分钟宽窗口，
+     保证“切到别的 APP 错过了那一分钟”回来时依然能补弹遮罩 */
+  const grace = (document.visibilityState === 'hidden' || gap > 20000)
+    ? SLEEP_SCHEDULE_BG_GRACE_MS : SLEEP_SCHEDULE_GRACE_MS;
+  const sleeping = !!(state.sleep && state.sleep.isSleeping);
+  /* 后台到点、回到前台：先把欠下的遮罩补上（用户点通知回来也是这条路径） */
+  if (sleepAutoPending && !sleeping && document.visibilityState === 'visible') {
+    sleepAutoPending = false;
+    startSleep();
+    return;
+  }
+  if (sleeping) return;
+  checkOneSleepSchedule({
+    kind: 'night',
+    enabled: state.settings.nightSleepEnabled === true,
+    time: state.settings.nightSleepTime,
+    lastKey: 'lastNightTriggerDate'
+  }, grace);
+  /* 夜间刚触发就不再叠午睡（两组设在同一分钟时只弹一次） */
+  if (state.sleep && state.sleep.isSleeping) return;
+  checkOneSleepSchedule({
+    kind: 'noon',
+    enabled: state.settings.noonSleepEnabled === true,
+    time: state.settings.noonSleepTime,
+    lastKey: 'lastNoonTriggerDate'
+  }, grace);
 }
 
 /* ---------------- 一起睡觉主页 ---------------- */
@@ -17528,18 +17637,28 @@ function renderSleepPage() {
         <div class="sl-hero-desc">${sleeping ? '已经睡了 ' + sleepElapsedMinutes() + ' 分钟' : '关掉灯，靠着彼此慢慢睡着'}</div>
         <button class="sl-primary sl-start-btn" data-sl-start type="button"${sleeping ? ' disabled' : ''}>${sleeping ? '正在睡觉中…' : '开始睡觉'}</button>
       </div>
-      <div class="sl-hist-head">历史睡眠记录</div>
+      <div class="sl-hist-head">定时强制睡眠</div>
       <div class="sl-set">
         <div class="sl-set-row">
-          <div class="sl-set-title">定时睡眠</div>
-          <label class="switch"><input type="checkbox" id="slSchedToggle" ${state.settings.sleepScheduleEnabled ? 'checked' : ''}><span class="slider"></span></label>
+          <div class="sl-set-title">夜间强制睡眠</div>
+          <label class="switch"><input type="checkbox" id="slNightToggle" ${state.settings.nightSleepEnabled ? 'checked' : ''}><span class="slider"></span></label>
         </div>
-        <div class="sl-set-time">
-          <input type="time" id="slSchedTime" value="${esc(state.settings.sleepScheduleTime)}" step="60">
+        <div class="sl-set-time" data-sl-time="night">
+          <input type="time" id="slNightTime" value="${esc(state.settings.nightSleepTime)}" step="60">
           <span class="sl-set-timezone">每天到点自动入睡</span>
         </div>
-        <div class="sl-set-hint">到达设定时间后，将强制进入睡眠模式，必须点击【我醒了】才能解锁。</div>
+        <div class="sl-set-divider"></div>
+        <div class="sl-set-row">
+          <div class="sl-set-title">午睡强制睡眠</div>
+          <label class="switch"><input type="checkbox" id="slNoonToggle" ${state.settings.noonSleepEnabled ? 'checked' : ''}><span class="slider"></span></label>
+        </div>
+        <div class="sl-set-time" data-sl-time="noon">
+          <input type="time" id="slNoonTime" value="${esc(state.settings.noonSleepTime)}" step="60">
+          <span class="sl-set-timezone">午休到点自动入睡</span>
+        </div>
+        <div class="sl-set-hint">到达设定时间后，将自动进入睡眠模式。如切到其他 APP，将收到通知提醒。</div>
       </div>
+      <div class="sl-hist-head">历史睡眠记录</div>
       ${hist.length ? `<div class="sl-hist">${hist.map(r => `
         <button class="sl-hist-item" data-sl-hist="${esc(r.id)}" type="button">
           <div class="sl-hist-ic">${APP_ICONS.sleep}</div>
@@ -17560,32 +17679,44 @@ function renderSleepPage() {
       const rec = (state.sleep.history || []).find(x => x.id === b.dataset.slHist);
       if (rec) openSleepTimeline(rec, true);
     }));
-    /* 定时睡眠设置：开关与时间实时保存；关闭时时间选择器置灰 */
-    const schedToggle = $('#slSchedToggle', body);
-    const schedTime = $('#slSchedTime', body);
-    const syncSchedUI = () => {
-      const on = !!(schedToggle && schedToggle.checked);
-      if (schedTime) schedTime.disabled = !on;
-      $$('.sl-set-time', body).forEach(el => el.classList.toggle('sl-set-off', !on));
-    };
-    if (schedToggle) schedToggle.addEventListener('change', () => {
-      state.settings.sleepScheduleEnabled = schedToggle.checked;
-      /* 开启时若时间非法，回落 23:30，保证一定有可触发时间 */
-      if (schedToggle.checked && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(state.settings.sleepScheduleTime || ''))) {
-        state.settings.sleepScheduleTime = '23:30';
-        if (schedTime) schedTime.value = '23:30';
-      }
-      persist(true);
-      syncSchedUI();
+    /* 定时强制睡眠：夜间 / 午睡两组独立设置，开关与时间实时保存；关闭时时间置灰 */
+    const schedCfg = [
+      { kind: 'night', toggle: '#slNightToggle', time: '#slNightTime', enKey: 'nightSleepEnabled', timeKey: 'nightSleepTime', fallback: '23:30' },
+      { kind: 'noon', toggle: '#slNoonToggle', time: '#slNoonTime', enKey: 'noonSleepEnabled', timeKey: 'noonSleepTime', fallback: '13:00' }
+    ];
+    const syncSchedUI = () => schedCfg.forEach(c => {
+      const tg = $(c.toggle, body), tm = $(c.time, body);
+      const on = !!(tg && tg.checked);
+      if (tm) tm.disabled = !on;
+      const wrap = $('[data-sl-time="' + c.kind + '"]', body);
+      if (wrap) wrap.classList.toggle('sl-set-off', !on);
     });
-    if (schedTime) schedTime.addEventListener('change', () => {
-      const v = String(schedTime.value || '');
-      if (/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) {
-        state.settings.sleepScheduleTime = v;
+    schedCfg.forEach(c => {
+      const tg = $(c.toggle, body), tm = $(c.time, body);
+      if (tg) tg.addEventListener('change', () => {
+        state.settings[c.enKey] = tg.checked;
+        if (tg.checked) {
+          /* 开启即请求通知权限：切到别的 APP 时才能弹出系统提醒 */
+          requestSleepNotifyPermission();
+          if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(state.settings[c.timeKey] || ''))) {
+            state.settings[c.timeKey] = c.fallback;
+            if (tm) tm.value = c.fallback;
+          }
+        }
         persist(true);
-      } else {
-        schedTime.value = state.settings.sleepScheduleTime || '23:30';
-      }
+        syncSchedUI();
+        /* 立即检查一次：刚打开开关时可能正好落在触发窗口内 */
+        try { checkSleepSchedules(); } catch (e) { console.warn('[sleep] 定时检查失败：', e); }
+      });
+      if (tm) tm.addEventListener('change', () => {
+        const v = String(tm.value || '');
+        if (/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) {
+          state.settings[c.timeKey] = v;
+          persist(true);
+        } else {
+          tm.value = state.settings[c.timeKey] || c.fallback;
+        }
+      });
     });
     syncSchedUI();
   }
@@ -19081,8 +19212,8 @@ async function boot() {
   checkTodoReminders(); /* 页面加载完成时立刻补查一次错过的待办提醒 */
   /* 离线消息补发：结算上次离开后新产生的 TA 消息与超时待办，显示顶部纯文本横幅 */
   checkOfflineEvents();
-  /* 定时自动睡眠：冷启动时立刻查一次，可能用户设了 23:30、当前就是 23:30 */
-  try { checkSleepSchedule(); } catch (e) { console.warn('[sleep] 定时睡眠检查失败，已跳过：', e); }
+  /* 定时强制睡眠：冷启动时立刻查一次，可能用户设了 23:30、当前正好落在触发窗口内 */
+  try { checkSleepSchedules(); } catch (e) { console.warn('[sleep] 定时睡眠检查失败，已跳过：', e); }
   /* 一起睡觉：刷新前正在睡 → 直接回到全屏遮罩；刷新前刚醒未看结算 → 直接回到结算卡。
      用 try-catch 兜住：睡眠功能出现任何异常都不允许阻塞首屏（Loading 必须照常关闭） */
   try { sleepRestoreOnBoot(); } catch (e) { console.warn('[sleep] 恢复状态失败，已跳过：', e); }
@@ -19101,7 +19232,7 @@ async function boot() {
     checkTaReadInvite();
     checkTodoReminders();
     try { checkExpiredTransactions(); } catch (e) { /* 容错：单次异常不影响后续轮询与其它任务 */ }
-    try { checkSleepSchedule(); } catch (e) { /* 容错 */ }
+    try { checkSleepSchedules(); } catch (e) { /* 容错 */ }
   }, 15000);
 
   /* 刷新后若保活开关为开启：浏览器通常会在无手势时拦截播放，
@@ -19118,7 +19249,7 @@ async function boot() {
       checkTodoReminders(); /* 切后台期间错过的待办提醒，回前台立即补发 */
       checkLetterReplies(); /* 切后台期间到期的回信 */
       checkAutoLetters();   /* 时间戳已过期则立刻补发主动来信 */
-      try { checkSleepSchedule(); } catch (e) { /* 切后台期间可能刚好过了定时点，回前台补查 */ }
+      try { checkSleepSchedules(); } catch (e) { /* 切后台期间可能刚好过了定时点，回前台补查并补弹遮罩 */ }
       /* 全部补查完成后再结算离线事件：这样补发出来的 TA 消息也会被计入横幅 */
       checkOfflineEvents();
     }
@@ -19130,6 +19261,7 @@ async function boot() {
     if (!state) return;
     checkLetterReplies();
     checkAutoLetters();
+    try { checkSleepSchedules(); } catch (e) { /* bfcache 恢复：补查定时睡眠 */ }
   });
 
   /* 手动测试入口：控制台执行 forceAutoLetter() 或 rdForceAutoLetter() 即可强制收到一封主动来信 */
