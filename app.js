@@ -16579,8 +16579,17 @@ function renderSettingsPage() {
   /* 版本号显示：内容来自文件顶部全局常量 APP_VERSION */
   $('#app-version-display', body).textContent = '当前版本：' + APP_VERSION;
 
-  /* 检查更新：只弹二次确认，确认后才清理缓存并强制刷新 */
-  $('#appUpdateBtn').addEventListener('click', openUpdateConfirm);
+  /* 检查更新：普通点击弹二次确认；长按 3 秒走终极强制刷新 */
+  $('#appUpdateBtn').addEventListener('click', e => {
+    /* 长按已经触发了终极刷新：吞掉这次 click，避免又弹出普通确认框 */
+    if (updateBtnLongPressFired) {
+      updateBtnLongPressFired = false;
+      e.preventDefault();
+      return;
+    }
+    openUpdateConfirm();
+  });
+  bindUpdateLongPress($('#appUpdateBtn'));
 
   $('#editMe').addEventListener('click', openMyProfileEditor);
   $('#settingsAddRole').addEventListener('click', () => openRoleEditor(null));
@@ -16696,8 +16705,9 @@ function renderSettingsPage() {
 
 /* =========================================================
  * 二十三·一、检查更新（设置页最底部的「检查更新」按钮）
- * 流程：点击 → 全屏二次确认弹窗 → 确认后注销 Service Worker、
- *       清空 CacheStorage → 500ms 兜底延迟 → 带最新时间戳强制刷新
+ * 流程：点击 → 全屏二次确认弹窗 → 确认后【异步等待】注销全部 Service Worker、
+ *       清空 CacheStorage → 带全新 v 时间戳强制跳转（穿透浏览器 / PWA 缓存）
+ * 备用：长按按钮 3 秒 → 终极强制刷新（清理后 window.location.reload(true)）
  * 弹窗 DOM 固定在 index.html 的 #updateConfirmMask，这里只处理交互
  * ========================================================= */
 function openUpdateConfirm() {
@@ -16716,7 +16726,45 @@ function closeUpdateConfirm() {
   setTimeout(() => mask.classList.add('hidden'), 180);
 }
 
-/* 确定更新：按钮改文案并禁用 → 写入刷新标记 → 后台清理缓存 → 500ms 后强制刷新 */
+/* 彻底清理 SW + Cache API：两个清理任务并行，每个都吞异常，
+ * 最多等 4 秒（清理卡死也绝不阻止刷新），返回 Promise 供调用方 await */
+function purgeBrowserCaches() {
+  const jobs = [];
+  /* ① 注销所有 Service Worker：旧 SW 拦截请求返回缓存文件是“更新不生效”的头号原因 */
+  if ('serviceWorker' in navigator) {
+    jobs.push((async () => {
+      try {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister()));
+      } catch (err) { console.warn('[检查更新] 注销 Service Worker 失败：', err); }
+    })());
+  }
+  /* ② 清空所有 CacheStorage：遍历缓存空间名逐个 delete */
+  if (typeof caches !== 'undefined' && caches && typeof caches.keys === 'function') {
+    jobs.push((async () => {
+      try {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      } catch (err) { console.warn('[检查更新] 清理缓存失败：', err); }
+    })());
+  }
+  /* 清理是异步的，必须等它完成再跳转；4 秒上限兜底，防止某个 API 永不 resolve */
+  return Promise.race([
+    Promise.all(jobs),
+    new Promise(resolve => setTimeout(resolve, 4000))
+  ]);
+}
+
+/* 生成“带最新 v 时间戳”的地址：先删掉旧的时间戳参数，再写入新的 */
+function cacheBustedUrl() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete('t');
+  url.searchParams.delete('v');
+  url.searchParams.set('v', Date.now().toString());
+  return url.toString();
+}
+
+/* 确定更新：按钮改文案并禁用 → 写刷新标记 → 【等待】清理完成 → 强制跳转 */
 function startUpdateRefresh() {
   const btn = $('#appUpdateBtn');
   if (btn) {
@@ -16728,29 +16776,100 @@ function startUpdateRefresh() {
   /* 刷新标记：刷新后由 checkUpdateResult() 读取，用于判断并弹出更新结果提示 */
   try { sessionStorage.setItem('is_checking_update', 'true'); } catch (err) { /* 隐私模式下可能不可用，忽略 */ }
 
-  /* 兜底刷新：即使下面的清理逻辑卡住或报错，500ms 后也一定带时间戳刷新 */
-  setTimeout(() => {
-    const url = new URL(window.location.href);
-    url.searchParams.set('t', Date.now());   /* 覆盖旧的 t 参数，强制绕过浏览器 / PWA 缓存 */
-    window.location.replace(url.toString());
-  }, 500);
+  /* 兜底刷新：万一清理 Promise 异常，6 秒后也必须穿透缓存跳转 */
+  const fallback = setTimeout(() => {
+    window.location.replace(cacheBustedUrl());
+  }, 6000);
 
-  (async () => {
-    /* ① 注销 Service Worker（PWA 缓存是“改了代码却还是旧版”的常见原因） */
-    if ('serviceWorker' in navigator) {
-      try {
-        const regs = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(regs.map(r => r.unregister()));
-      } catch (err) { console.warn('[检查更新] 注销 Service Worker 失败：', err); }
+  purgeBrowserCaches().then(() => {
+    clearTimeout(fallback);
+    window.location.replace(cacheBustedUrl());
+  }).catch(() => {
+    clearTimeout(fallback);
+    window.location.replace(cacheBustedUrl());
+  });
+}
+
+/* ---------------- 长按 3 秒：终极强制刷新（PWA 死锁备用出口） ---------------- */
+let updateBtnLongPressFired = false;
+
+function openUltimateRefreshConfirm() {
+  let mask = $('#ultimateRefreshMask');
+  if (!mask) {
+    /* 独立于 index.html 的埋点：运行时创建，不依赖任何外部样式表 */
+    mask = document.createElement('div');
+    mask.id = 'ultimateRefreshMask';
+    mask.style.cssText = 'position:fixed;inset:0;z-index:100200;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.45);';
+    mask.innerHTML = `
+      <div style="width:100%;max-width:320px;background:#fff;border-radius:16px;padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.25);text-align:center;">
+        <div style="font-size:26px;line-height:1;margin-bottom:10px;">⚠️</div>
+        <div style="font-size:16px;font-weight:700;color:#1b1d21;">终极强制刷新</div>
+        <div style="font-size:13px;line-height:1.7;color:#5f6672;margin-top:10px;">即将执行终极强制刷新，可能会清除页面所有临时缓存，你的聊天数据不会丢失，是否继续？</div>
+        <div style="display:flex;gap:10px;margin-top:18px;">
+          <button type="button" data-ult-cancel style="flex:1;padding:10px 0;border-radius:10px;background:#f2f4f7;color:#5f6672;font-size:14px;">取消</button>
+          <button type="button" data-ult-ok style="flex:1;padding:10px 0;border-radius:10px;background:#ff5a5f;color:#fff;font-size:14px;font-weight:600;">继续</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mask);
+    mask.addEventListener('click', e => {
+      if (e.target === mask || e.target.closest('[data-ult-cancel]')) {
+        mask.remove();
+      } else if (e.target.closest('[data-ult-ok]')) {
+        mask.remove();
+        startUltimateRefresh();
+      }
+    });
+  }
+}
+
+/* 终极刷新：清理 SW + Cache 全部完成后，额外用 reload(true) 强制向服务器拉取；
+ * 若浏览器忽略 reload 参数，则退回带 v 时间戳的 replace */
+async function startUltimateRefresh() {
+  try { sessionStorage.setItem('is_checking_update', 'true'); } catch (err) { /* 忽略 */ }
+  try { await purgeBrowserCaches(); } catch (err) { console.warn('[检查更新] 终极清理失败：', err); }
+  /* unregister 之后当前页可能仍被旧 SW 控制，再发一次跳过等待消息 */
+  try {
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: 'SKIP_WAITING' });
     }
-    /* ② 清空 CacheStorage：遍历所有缓存版本一次性删除 */
-    if (typeof caches !== 'undefined' && caches && typeof caches.keys === 'function') {
-      try {
-        const keys = await caches.keys();
-        await Promise.all(keys.map(k => caches.delete(k)));
-      } catch (err) { console.warn('[检查更新] 清理缓存失败：', err); }
+  } catch (err) { /* 忽略 */ }
+  /* 给浏览器一点时间真正结束 SW 注销事务，再强制重载 */
+  setTimeout(() => {
+    try { window.location.reload(true); } catch (err) {
+      window.location.replace(cacheBustedUrl());
     }
-  })();
+    /* reload(true) 若被浏览器静默忽略，1.5 秒后再补一次穿透跳转 */
+    setTimeout(() => { window.location.replace(cacheBustedUrl()); }, 1500);
+  }, 150);
+}
+
+/* 长按「检查更新」按钮 3 秒：弹出终极刷新确认（普通点击仍是常规更新） */
+function bindUpdateLongPress(btn) {
+  if (!btn || btn.dataset.lpBound === '1') return;
+  btn.dataset.lpBound = '1';
+  let timer = 0;
+  const cancel = () => { if (timer) { clearTimeout(timer); timer = 0; } };
+  btn.addEventListener('pointerdown', e => {
+    if (btn.disabled) return;
+    if (e.button != null && e.button !== 0) return;   /* 只响应左键 / 触摸 */
+    cancel();
+    updateBtnLongPressFired = false;
+    timer = setTimeout(() => {
+      timer = 0;
+      updateBtnLongPressFired = true;
+      openUltimateRefreshConfirm();
+      try { if (navigator.vibrate) navigator.vibrate(30); } catch (err) { /* 忽略 */ }
+    }, 3000);
+  });
+  btn.addEventListener('pointerup', () => {
+    cancel();
+    /* 松手后的 click 紧随其后（<350ms）：先让 click 拦截生效，再复位标记 */
+    setTimeout(() => { updateBtnLongPressFired = false; }, 350);
+  });
+  btn.addEventListener('pointerleave', cancel);
+  btn.addEventListener('pointercancel', cancel);
+  /* 移动端长按会弹系统菜单，这里一并拦掉 */
+  btn.addEventListener('contextmenu', e => e.preventDefault());
 }
 
 /* 弹窗按钮只绑一次（boot 时调用）：取消中断，确定更新才执行清理与刷新 */
