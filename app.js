@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.7.1';
+const APP_VERSION = 'v8.7.2';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -982,7 +982,7 @@ function mergeState(saved) {
     } : null;
     const pending = normSleepRecord(slSrc.pendingSleepData);
     out.sleep = {
-      isSleeping: slSrc.isSleeping === true && Number(slSrc.startTime) > 0,
+      isSleeping: (slSrc.isSleeping === true || slSrc.isSleeping === 'true') && Number(slSrc.startTime) > 0,
       startTime: Number(slSrc.startTime) || 0,
       pendingSummary: slSrc.pendingSummary === true && !!pending,
       pendingSleepData: pending,
@@ -17310,10 +17310,10 @@ const sleepEvents = {
   action: [
     "翻了个身，下意识地把你搂得更紧了。", "迷迷糊糊中伸手帮你掖了掖被角。",
     "把脑袋埋进你的颈窝里，贪婪地蹭了蹭。", "在睡梦中轻轻拍着你的背，像在哄小孩。",
-    "抓住了你的手，十指紧扣后才继续安稳睡去。", "像只大型犬一样，霸道地把你整个人圈在怀里。",
+    "抓住了你的手，十指紧扣后才继续安稳睡去。", "像只黏人的大狗一样，霸道地把你整个人圈在怀里。",
     "睡相不太好，一条腿直接压在了你身上。", "轻轻帮你把脸上碍事的碎发拨开。",
     "半夜觉得有点冷，闭着眼睛往你怀里钻。", "无意识地凑过来，嘴唇擦过了你的耳畔。",
-    "把你抱得太紧，你稍微动了一下，他又迷迷糊糊地收紧手臂。", "手在你腰间轻轻摩挲了两下，像是在确认你还在。",
+    "把你抱得太紧，你稍微动了一下，TA又迷迷糊糊地收紧手臂。", "手在你腰间轻轻摩挲了两下，像是在确认你还在。",
     "睡梦中突然伸手摸向旁边，碰到你之后才放松下来。", "把被子全卷走了，过了一会儿又迷迷糊糊分给你一半。",
     "下巴抵在你的头顶，把你抱得严严实实的。", "半梦半醒间轻轻捏了捏你的脸。",
     "像是在找什么，最后把脸颊贴在了你的手心里。", "翻身的时候把你捞进怀里，发出一声满足的轻叹。",
@@ -17329,19 +17329,19 @@ const sleepEvents = {
     "在梦里答应了一声：“嗯，我在。”", "极其小声地说了句：“好喜欢你。”",
     "不知道梦见了什么，嘟囔着：“别抢我的……” ", "呼吸声中夹杂着几声无意义的黏糊鼻音。",
     "嘴巴动了动，似乎想说什么，最后只是蹭了蹭枕头。", "说了一句：“盖好被子……”",
-    "低声呢喃：“终于抱到了。”", "半梦半醒地喊了一声：“老婆……”"
+    "低声呢喃：“终于抱到了。”", "半梦半醒地喊了一声：“宝宝……”"
   ],
   inner: [
     "呼吸非常平稳，睡得很沉、很安心。", "眉头微微皱起，不知道是不是梦见了什么着急的事。",
     "睡梦中似乎感觉到了你在身边，嘴角微微上扬。", "呼吸声就在耳边，温热的气息打在你的皮肤上。",
     "像是做了什么美梦，蹭了蹭枕头。", "虽然睡着了，但潜意识里依然保持着靠近你的姿势。",
     "睡得很安静，只有在偶尔翻身时才会发出一点细微的声响。", "梦里似乎也有些紧张，下意识地抓住了你的衣角。",
-    "他身上的味道把你包围着，让人感到莫名的踏实。", "心跳声平缓而有力，隔着薄薄的睡衣传给你。",
+    "TA身上的味道把你包围着，让人感到莫名的踏实。", "心跳声平缓而有力，隔着薄薄的睡衣传给你。",
     "即使在深度睡眠中，身体也本能地护着你。", "眉头舒展，看起来像卸下了所有的防备。",
     "平时总是很成熟的样子，睡着时却有种意外的乖巧感。", "呼吸的节奏偶尔和你同步，像是在梦里也陪着你。",
     "似乎梦见了好天气，神色非常放松。", "身体微微蜷缩着，偏向你所在的方向。",
     "嘴唇微微张开，毫无防备的样子。", "偶尔会像个小孩一样，在枕头上蹭两下。",
-    "睡得很熟，连你轻轻碰他，他都没有醒。", "仿佛因为有你在，连梦都是甜丝丝的。"
+    "睡得很熟，连你轻轻碰TA，TA都没有醒。", "仿佛因为有你在，连梦都是甜丝丝的。"
   ],
   watching: [
     "半夜醒来了一次，在黑暗中静静地看了你好一会儿。", "悄悄凑过来，在你额头上落下了一个极轻的吻。",
@@ -17388,13 +17388,17 @@ function sleepElapsedMinutes() {
 
 /* 相邻两条睡眠事件的最小间隔：30 分钟，防止动作全挤在同一分钟里 */
 const SLEEP_EVENT_GAP_MS = 30 * 60 * 1000;
+/* 入睡后的静默空窗：前 15 分钟绝不触发任何 TA 动态（刚躺下还在酝酿睡意） */
+const SLEEP_QUIET_WINDOW_MS = 15 * 60 * 1000;
 
 /* 生成 TA 这一晚的睡眠时间轴：
- * 次数由总时长决定：
- *   < 30 分钟（极短）      → 只生成 1 条，放在睡眠正中间；
- *   30~60 分钟（标准午休） → 1~2 条；
- *   ≥ 60 分钟（长睡眠）    → 4~8 条。
- * 数量上限：最多 Math.floor(总时长 / 30) + 1 条（时长决定的物理上限，超出必然挤在一起）。
+ * 静默空窗：所有事件时间戳都必须落在「入睡 + 15 分钟」之后；
+ *   总时长 ≤ 15 分钟（眯一下 / 误触）→ 直接空时间轴，UI 显示“你们睡得很安稳”；
+ * 次数由总时长决定（基于 15 分钟之后的有效区间）：
+ *   15~30 分钟（含 30）→ 最多 1 条（放在有效区间正中间）；
+ *   30~60 分钟（标准午休）→ 1~2 条；
+ *   ≥ 60 分钟（长睡眠）→ 4~8 条。
+ * 数量上限：最多 Math.floor(有效区间 / 30) + 1 条（时长决定的物理上限，超出必然挤在一起）。
  * 时间点生成：随机打点 + 30 分钟硬校验 —— 新点与已有点差值 < 30 分钟立即丢弃重试；
  * 每个点最多尝试 100 次，仍塞不下就停止（绝不陷入死循环、也绝不生成过密的时间点）。
  * 最终时间戳统一从小到大排序。 */
@@ -17405,23 +17409,26 @@ function sleepBuildRecord(startTime, endTime) {
   const durationMins = span / 60000;
   const kinds = ['action', 'murmur', 'inner', 'watching'];
   const timeline = [];
-  const midTime = start + span / 2;   /* 只能有 1 条时：放在整段睡眠的正中间 */
+  /* 有效起点 = 入睡时间 + 15 分钟；有效区间可能为负（极短睡眠），此时一律不生成 */
+  const effStart = start + SLEEP_QUIET_WINDOW_MS;
+  const effSpan = Math.max(0, end - effStart);
+  const midTime = effStart + effSpan / 2;   /* 只能有 1 条时：放在有效区间正中间 */
   const pushEvent = ts => {
     const kind = pickOne(kinds);
     timeline.push({
-      ts: clamp(Math.round(ts), start, end),
+      ts: clamp(Math.round(ts), effStart, end),
       kind,
       text: pickOne(sleepEvents[kind])
     });
   };
-  /* 打点并校验：与已生成的所有时间点相距不足 30 分钟就丢弃重试 */
+  /* 打点并校验：只在 [有效起点, 起床时间] 内随机，且与已生成点相距不足 30 分钟就丢弃重试 */
   const MIN_GAP = SLEEP_EVENT_GAP_MS;
   const placePoints = count => {
     const times = [];
     for (let i = 0; i < count; i++) {
       let placed = false;
       for (let attempt = 0; attempt < 100; attempt++) {
-        const ts = start + Math.random() * span;
+        const ts = effStart + Math.random() * effSpan;
         if (times.every(t => Math.abs(t - ts) >= MIN_GAP)) {
           times.push(ts);
           placed = true;
@@ -17434,13 +17441,15 @@ function sleepBuildRecord(startTime, endTime) {
     times.sort((a, b) => a - b).forEach(pushEvent);
   };
 
-  if (durationMins < 30) {
-    /* 总时长不足 30 分钟：只放 1 条，且固定在睡眠正中间 */
+  if (durationMins <= 15 || effSpan <= 0) {
+    /* 极短睡眠兜底：直接返回空时间轴（渲染端会显示“这一觉，你们睡得很安稳。”） */
+  } else if (durationMins <= 30) {
+    /* 有效区间不足 15 分钟：最多只触发 1 条，放在空窗结束后的正中间 */
     pushEvent(midTime);
   } else {
     const desired = durationMins < 60 ? randInt(1, 2) : randInt(4, 8);
-    /* 该时长下最多能容纳几个“间隔 ≥ 30 分钟”的事件 */
-    const maxPossibleEvents = Math.floor(durationMins / 30) + 1;
+    /* 有效区间下最多能容纳几个“间隔 ≥ 30 分钟”的事件 */
+    const maxPossibleEvents = Math.floor(effSpan / 60000 / 30) + 1;
     const count = Math.max(1, Math.min(desired, maxPossibleEvents));
     if (count <= 1) pushEvent(midTime);
     else placePoints(count);
@@ -17499,6 +17508,9 @@ function sleepTickStop() {
 }
 
 function showSleepOverlay() {
+  /* 兜底铁律：只有 state.sleep.isSleeping === true 才允许出现全屏遮罩。
+     任何调用方（恢复、定时、误触）在未置位时都不可能把页面锁死 */
+  if (!(state && state.sleep && state.sleep.isSleeping)) return;
   const ov = ensureSleepOverlay();
   ov.classList.remove('hidden');
   sleepTickStart();
@@ -17619,11 +17631,29 @@ function wakeUpSleep() {
   showSleepSummary();
 }
 
-/* 刷新 / 冷启动恢复：进行中 → 遮罩；待结算 → 结算卡 */
+/* 刷新 / 冷启动恢复：进行中 → 遮罩；待结算 → 结算卡。
+ * 异常数据清洗：isSleeping 为真但 startTime 无效 / 在未来 / 已超过 24 小时，
+ * 一律视为“异常卡死状态”，直接重置为未睡并隐藏遮罩，避免一进页面就被锁 */
 function sleepRestoreOnBoot() {
   const sl = state.sleep;
   if (!sl) return;
-  if (sl.isSleeping && sl.startTime) { showSleepOverlay(); return; }
+  const sleeping = (sl.isSleeping === true || sl.isSleeping === 'true');
+  if (sleeping) {
+    const st = Number(sl.startTime) || 0;
+    const invalid = !st || st > Date.now() + 60000 || (Date.now() - st) > 24 * 60 * 60 * 1000;
+    if (invalid) {
+      console.warn('[sleep] 检测到异常睡眠状态（startTime 无效或超过 24 小时），已自动重置');
+      sl.isSleeping = false;
+      sl.startTime = 0;
+      sl.pendingSummary = false;
+      sl.pendingSleepData = null;
+      persist(true);
+      hideSleepOverlay();
+      return;
+    }
+    showSleepOverlay();
+    return;
+  }
   if (sl.pendingSummary && sl.pendingSleepData) { showSleepSummary(); }
 }
 
@@ -17643,6 +17673,10 @@ const SLEEP_SCHEDULE_GRACE_MS = 5 * 60 * 1000;        /* 前台错过窗口：5 
 const SLEEP_SCHEDULE_BG_GRACE_MS = 60 * 60 * 1000;    /* 后台错过窗口：60 分钟（期间可能被系统冻结） */
 /* 后台已到点、但当时没弹遮罩：等页面回到前台立刻补弹（通知点回来也走这条） */
 let sleepAutoPending = false;
+/* 定时规则的“生效起算时刻”：早于此刻的设定时间点一律不追溯触发。
+ * 启动、以及用户手动改开关 / 改时间时都会重新起算 —— 这样“逛设置、调时间”绝不会被立即锁屏，
+ * 只有真正等到设定时间点到达（且此刻之后）才会触发。 */
+let sleepSchedArmedAt = Date.now();
 
 function sleepDayKey(d) {
   return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
@@ -17692,6 +17726,9 @@ function checkOneSleepSchedule(cfg, grace) {
   const target = new Date(d.getFullYear(), d.getMonth(), d.getDate(), Number(hm[1]), Number(hm[2]), 0, 0);
   if (target.getTime() > d.getTime()) target.setDate(target.getDate() - 1);
   const diff = d.getTime() - target.getTime();
+  /* 关键防误触：设定时刻早于本轮生效起算点 → 说明它是“过去的时间”（刚启动 / 刚改设置），
+     当天绝不追溯触发，自然顺延到明天的同一个时刻 */
+  if (target.getTime() < sleepSchedArmedAt) return;
   if (diff > grace) return;                       /* 已超出窗口：等下一个周期 */
   const dayKey = sleepDayKey(target);
   if (state[cfg.lastKey] === dayKey) return;      /* 这一天已经触发过，绝不重复 */
@@ -17779,14 +17816,17 @@ function renderSleepPage() {
       </div>
       <div class="sl-hist-head">历史睡眠记录</div>
       ${hist.length ? `<div class="sl-hist">${hist.map(r => `
-        <button class="sl-hist-item" data-sl-hist="${esc(r.id)}" type="button">
+        <div class="sl-hist-item" data-sl-hist="${esc(r.id)}">
           <div class="sl-hist-ic">${APP_ICONS.sleep}</div>
           <div class="sl-hist-main">
             <div class="sl-hist-date">${esc(sleepDayLabel(r.startTime))}</div>
             <div class="sl-hist-dur">${esc(fmtClock(r.startTime))} - ${esc(fmtClock(r.endTime))} · ${esc(sleepDurationText(r.duration))}</div>
           </div>
           <div class="arrow">›</div>
-        </button>`).join('')}</div>`
+          <button class="sl-hist-del" data-sl-del="${esc(r.id)}" type="button" aria-label="删除这条记录">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+          </button>
+        </div>`).join('')}</div>`
       : '<div class="sl-empty">还没有睡眠记录，今晚一起睡一觉吧。</div>'}
     </div>
   `);
@@ -17797,6 +17837,19 @@ function renderSleepPage() {
     $$('[data-sl-hist]', body).forEach(b => b.addEventListener('click', () => {
       const rec = (state.sleep.history || []).find(x => x.id === b.dataset.slHist);
       if (rec) openSleepTimeline(rec, true);
+    }));
+    /* 历史记录：单条删除（二次确认 → 过滤数组 → 落盘 → 立即重渲染，删光自动回空状态） */
+    $$('[data-sl-del]', body).forEach(b => b.addEventListener('click', async e => {
+      e.stopPropagation();   /* 点删除不能同时打开时间轴 */
+      const id = b.dataset.slDel;
+      const ok = await confirmDialog('删除睡眠记录', '确定要删除这条睡眠记录吗？删除后不可恢复。', '删除', true);
+      if (!ok) return;
+      const sl = state.sleep;
+      if (!sl || !Array.isArray(sl.history)) return;
+      sl.history = sl.history.filter(x => x.id !== id);
+      persist(true);         /* IndexedDB 立即落盘：刷新后不会复活 */
+      showToast('已删除这条睡眠记录');
+      renderSleepPage();     /* 重新渲染列表：删光了就显示“还没有睡眠记录” */
     }));
     /* 定时强制睡眠：夜间 / 午睡两组独立设置，开关与时间实时保存；关闭时时间置灰 */
     const schedCfg = [
@@ -17822,15 +17875,19 @@ function renderSleepPage() {
             if (tm) tm.value = c.fallback;
           }
         }
+        /* 改设置时重新起算生效时刻：如果设的正好是“刚刚过去”的时间，今天不追溯触发 */
+        sleepSchedArmedAt = Date.now();
         persist(true);
         syncSchedUI();
-        /* 立即检查一次：刚打开开关时可能正好落在触发窗口内 */
+        /* 检查一次：只对“未来到达”的时间点生效，绝不会因为刚打开开关就立刻锁屏 */
         try { checkSleepSchedules(); } catch (e) { console.warn('[sleep] 定时检查失败：', e); }
       });
       if (tm) tm.addEventListener('change', () => {
         const v = String(tm.value || '');
         if (/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) {
           state.settings[c.timeKey] = v;
+          /* 改时间同样重新起算，避免调到一个刚过去的时间点后被立即锁死 */
+          sleepSchedArmedAt = Date.now();
           persist(true);
         } else {
           tm.value = state.settings[c.timeKey] || c.fallback;

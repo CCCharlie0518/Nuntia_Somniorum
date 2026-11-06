@@ -4036,17 +4036,28 @@ body.voice-recording *{
 .sl-hist-main{flex:1;min-width:0;}
 .sl-hist-date{font-size:14px;font-weight:600;color:var(--text);}
 .sl-hist-dur{font-size:11.5px;color:var(--sub);margin-top:3px;}
-.sl-hist-item .arrow{color:#C7C7CC;font-size:20px;flex-shrink:0;line-height:1;}
+.sl-hist-item .arrow{color:#C7C7CC;font-size:18px;flex-shrink:0;line-height:1;}
+/* 单条删除：细线条垃圾桶，平时浅灰，按下才变红，不抢日期/时长的视觉 */
+.sl-hist-del{
+  flex-shrink:0;width:30px;height:30px;border-radius:9px;
+  display:grid;place-items:center;padding:0;
+  background:transparent;border:0;color:#c2c7d0;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+}
+.sl-hist-del:active{background:#fdecec;color:var(--danger);}
+.sl-hist-del svg{width:16px;height:16px;}
 .sl-empty{text-align:center;color:#b6bac2;font-size:12.5px;padding:22px 16px;line-height:1.7;}
 
 /* ---- 全屏睡眠遮罩 ---- */
+/* 默认必须不可见：只有 JS 显式移除 .hidden（且 state.sleep.isSleeping 为 true）才会出现 */
 #sleep-overlay{
   position:fixed;inset:0;z-index:99999;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  display:none;flex-direction:column;align-items:center;justify-content:center;
   background:radial-gradient(120% 90% at 50% 18%,#26314d 0%,#141a2c 55%,#0b0f1c 100%);
   color:#fff;overflow:hidden;touch-action:none;overscroll-behavior:contain;
   -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
 }
+#sleep-overlay:not(.hidden){display:flex;}
 #sleep-overlay.hidden{display:none !important;}
 /* 夜空里几点微光（纯装饰，不接收事件） */
 .sl-sky{position:absolute;inset:0;pointer-events:none;}
