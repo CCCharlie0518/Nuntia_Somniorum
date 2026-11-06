@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.7.2';
+const APP_VERSION = 'v8.7.3';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -17637,6 +17637,27 @@ function wakeUpSleep() {
 function sleepRestoreOnBoot() {
   const sl = state.sleep;
   if (!sl) return;
+  /* v8.7.2 脏数据清理：旧版定时误判（分钟未捕获 → NaN 比较失效 → 任意时刻误触发）会留下
+   * "NaN-NaN-Na" 之类的非法触发日期，且可能把没点过“开始睡觉”的用户误锁进睡眠态。
+   * 检测到脏标记（证明本机中过 Bug）时：清空脏标记 + 强制重置睡眠态，清理后只执行一次。 */
+  try {
+    const dateOK = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+    const poisoned = (state.lastNightTriggerDate && !dateOK(state.lastNightTriggerDate))
+      || (state.lastNoonTriggerDate && !dateOK(state.lastNoonTriggerDate));
+    if (poisoned) {
+      if (!dateOK(state.lastNightTriggerDate)) state.lastNightTriggerDate = '';
+      if (!dateOK(state.lastNoonTriggerDate)) state.lastNoonTriggerDate = '';
+      if (sl.isSleeping === true || sl.isSleeping === 'true') {
+        console.warn('[sleep] 检测到旧版定时误判造成的误锁定，已强制重置睡眠状态');
+        sl.isSleeping = false;
+        sl.startTime = 0;
+        sl.pendingSummary = false;
+        sl.pendingSleepData = null;
+        hideSleepOverlay();
+      }
+      persist(true);
+    }
+  } catch (e) { console.warn('[sleep] 脏数据清理失败，已跳过：', e); }
   const sleeping = (sl.isSleeping === true || sl.isSleeping === 'true');
   if (sleeping) {
     const st = Number(sl.startTime) || 0;
@@ -17658,25 +17679,18 @@ function sleepRestoreOnBoot() {
 }
 
 /* ---------------- 定时强制睡眠（夜间 / 午睡 两条独立定时器） ----------------
- * 由 boot 的全局轮询驱动（启动即查一次 + 每 15 秒一次）：
- *   1. 两组各自判断：开关关闭 → 跳过；只取“最近一次已到达的设定时刻”（今天没到点则取昨天），
- *      因此设定时间早于当前时间（23:00 设了 22:00）当天不会触发，自然顺延到明天；
- *   2. 前台在 5 分钟窗口内 → 直接 startSleep() 弹全屏遮罩；
- *      后台（document.hidden）给 60 分钟窗口 → 发系统通知，并记下待弹标记；
- *      用户点通知 / 切回网页 → visibilitychange 补查 → 立刻补弹遮罩；
- *   3. 触发后在 state 里记 lastNightTriggerDate / lastNoonTriggerDate（持久化），
- *      同一天同一组绝不重复触发；两组互不干扰；
+ * v8.7.2 重写：彻底废弃“大于等于即触发”与“宽窗口补触发”，改为【精确匹配 ±1 分钟窗口】。
+ *   1. 每天的设定时刻只允许在 [设定-1分钟, 设定+1分钟] 窗口内触发
+ *      （如设定 13:30 → 仅 13:29:00 ~ 13:31:00 之间判定为“时间到”）；
+ *   2. 过期作废：一旦越过窗口右边界（哪怕只过 1 分钟），今天就视为“已错过”，
+ *      静默把今天标记为已跳过，页面加载 / 刷新 / 切回前台都绝不再补触发；
+ *   3. 触发后把当天日期写入 state 持久化，同一天同一组绝不重复触发；两组互不干扰；
  *   4. 复用 startSleep()：置位 isSleeping + 持久化 + 弹遮罩，sleepSilent() 拦截自动生效，
- *      刷新后 sleepRestoreOnBoot 继续锁定（不点【我醒了】关掉网页也逃不掉）；
- *   5. 关掉网页时 lastNightTriggerDate 只是“昨天”，第二天到点重新触发。 */
-const SLEEP_SCHEDULE_GRACE_MS = 5 * 60 * 1000;        /* 前台错过窗口：5 分钟 */
-const SLEEP_SCHEDULE_BG_GRACE_MS = 60 * 60 * 1000;    /* 后台错过窗口：60 分钟（期间可能被系统冻结） */
-/* 后台已到点、但当时没弹遮罩：等页面回到前台立刻补弹（通知点回来也走这条） */
-let sleepAutoPending = false;
-/* 定时规则的“生效起算时刻”：早于此刻的设定时间点一律不追溯触发。
- * 启动、以及用户手动改开关 / 改时间时都会重新起算 —— 这样“逛设置、调时间”绝不会被立即锁屏，
- * 只有真正等到设定时间点到达（且此刻之后）才会触发。 */
-let sleepSchedArmedAt = Date.now();
+ *      刷新后 sleepRestoreOnBoot 继续锁定；
+ *   5. 后台到点只发系统通知并记下“待弹目标时刻”；回前台时重新校验窗口，已过期直接作废。 */
+const SLEEP_SCHEDULE_WINDOW_MS = 60 * 1000;   /* 精确触发窗口：设定时间前后各 1 分钟 */
+/* 后台到点的待弹信息：{ targetMs, kind }；回到前台必须重新过窗口校验，过期作废 */
+let sleepAutoPending = null;
 
 function sleepDayKey(d) {
   return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
@@ -17692,8 +17706,9 @@ function requestSleepNotifyPermission() {
   } catch (e) { console.warn('[sleep] 通知权限请求失败：', e); }
 }
 
-/* 后台到点：发一条系统通知（标题/内容按夜间、午睡区分） */
-function showSleepAutoNotification(kind) {
+/* 后台到点：发一条系统通知（标题/内容按夜间、午睡区分）。
+ * targetMs = 本次设定时刻的时间戳：用户点通知回来时要拿它重新校验 ±1 分钟窗口 */
+function showSleepAutoNotification(kind, targetMs) {
   try {
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
     const isNight = kind === 'night';
@@ -17705,61 +17720,63 @@ function showSleepAutoNotification(kind) {
     n.onclick = () => {
       try { window.focus(); } catch (e) { /* 某些浏览器前台不允许 focus，忽略 */ }
       try { n.close(); } catch (e) {}
-      sleepAutoPending = true;
-      /* 点击后页面已经回到前台：立刻补弹遮罩；仍在后台则等 visibilitychange */
-      if (document.visibilityState === 'visible') {
-        sleepAutoPending = false;
-        startSleep();
-      }
+      /* 记下待弹目标时刻，交给 checkSleepSchedules 统一做窗口校验：
+         用户可能很久之后才点通知，已过期（哪怕只过 1 分钟）就绝不补弹 */
+      sleepAutoPending = { targetMs: Number(targetMs) || 0, kind };
+      try { checkSleepSchedules(); } catch (e) { /* 容错 */ }
     };
   } catch (e) { console.warn('[sleep] 系统通知发送失败：', e); }
 }
 
-/* 单组定时判定：night / noon 完全独立，互不干扰 */
-function checkOneSleepSchedule(cfg, grace) {
+/* 单组定时判定：night / noon 完全独立，互不干扰。
+ * 核心铁律：只有“当前时间落在设定时刻 ±1 分钟窗口内”才允许触发；
+ * 越过窗口右边界 → 过期作废，静默标记今天已跳过，绝不补触发。 */
+function checkOneSleepSchedule(cfg) {
   if (cfg.enabled !== true) return;
   const want = String(cfg.time || '');
-  const hm = /^([01]\d|2[0-3]):[0-5]\d$/.exec(want);
+  /* 小时与分钟都必须捕获——旧版只捕获小时，hm[2] 为 undefined → Number(undefined)=NaN
+     → 构造出 Invalid Date → 所有 NaN 比较均为 false → 任意时刻误触发（本次 Bug 根源） */
+  const hm = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(want);
   if (!hm) return;
-  const d = new Date();
-  /* 取“最近一次已到达的设定时刻”：今天没到点就回退到昨天，diff 永远 ≥ 0 */
-  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate(), Number(hm[1]), Number(hm[2]), 0, 0);
-  if (target.getTime() > d.getTime()) target.setDate(target.getDate() - 1);
-  const diff = d.getTime() - target.getTime();
-  /* 关键防误触：设定时刻早于本轮生效起算点 → 说明它是“过去的时间”（刚启动 / 刚改设置），
-     当天绝不追溯触发，自然顺延到明天的同一个时刻 */
-  if (target.getTime() < sleepSchedArmedAt) return;
-  if (diff > grace) return;                       /* 已超出窗口：等下一个周期 */
-  const dayKey = sleepDayKey(target);
-  if (state[cfg.lastKey] === dayKey) return;      /* 这一天已经触发过，绝不重复 */
-  state[cfg.lastKey] = dayKey;
+  const now = new Date();
+  const nowMs = now.getTime();
+  const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), Number(hm[1]), Number(hm[2]), 0, 0);
+  const targetMs = target.getTime();
+  const today = sleepDayKey(now);
+  /* 过期作废：已越过窗口右边界（如设定 13:30，现在 13:31 之后）→ 今天彻底跳过。
+     顺手把今天标记为“已处理”，后续轮询 / 刷新 / 切后台再回来都不再判定 */
+  if (nowMs > targetMs + SLEEP_SCHEDULE_WINDOW_MS) {
+    if (state[cfg.lastKey] !== today) {
+      state[cfg.lastKey] = today;
+      persist(true);
+    }
+    return;
+  }
+  /* 还没到窗口左边界 → 安静等下一跳 */
+  if (nowMs < targetMs - SLEEP_SCHEDULE_WINDOW_MS) return;
+  /* 窗口内：今天已触发 / 已标记过 → 绝不重复 */
+  if (state[cfg.lastKey] === today) return;
+  state[cfg.lastKey] = today;
   persist(true);
   if (document.visibilityState === 'visible') {
-    startSleep();                                 /* 情况 A：前台，直接强制入睡 */
+    startSleep();                                     /* 情况 A：前台，直接强制入睡 */
   } else {
-    sleepAutoPending = true;                      /* 情况 B：后台，通知 + 回来补弹 */
-    showSleepAutoNotification(cfg.kind);
+    sleepAutoPending = { targetMs, kind: cfg.kind };  /* 情况 B：后台，通知 + 回前台校验补弹 */
+    showSleepAutoNotification(cfg.kind, targetMs);
   }
 }
 
-/* 上一次定时检查的时间：用于识别“定时器被浏览器冻结”的间隔 */
-let sleepSchedLastTick = Date.now();
-
 function checkSleepSchedules() {
   if (!state || !state.settings) return;
-  const now = Date.now();
-  const gap = now - sleepSchedLastTick;
-  sleepSchedLastTick = now;
-  /* 在后台、或两次检查间隔异常大（定时器被冻结 / 页面被挂起过）→ 用 60 分钟宽窗口，
-     保证“切到别的 APP 错过了那一分钟”回来时依然能补弹遮罩 */
-  const grace = (document.visibilityState === 'hidden' || gap > 20000)
-    ? SLEEP_SCHEDULE_BG_GRACE_MS : SLEEP_SCHEDULE_GRACE_MS;
   const sleeping = !!(state.sleep && state.sleep.isSleeping);
-  /* 后台到点、回到前台：先把欠下的遮罩补上（用户点通知回来也是这条路径） */
-  if (sleepAutoPending && !sleeping && document.visibilityState === 'visible') {
-    sleepAutoPending = false;
-    startSleep();
-    return;
+  /* 后台欠下的补弹：回到前台先重新校验窗口——已过期（哪怕只过 1 分钟）直接作废，绝不补弹 */
+  if (sleepAutoPending && document.visibilityState === 'visible') {
+    const p = sleepAutoPending;
+    sleepAutoPending = null;
+    if (!sleeping && Math.abs(Date.now() - (Number(p.targetMs) || 0)) <= SLEEP_SCHEDULE_WINDOW_MS) {
+      startSleep();
+      return;
+    }
   }
   if (sleeping) return;
   checkOneSleepSchedule({
@@ -17767,7 +17784,7 @@ function checkSleepSchedules() {
     enabled: state.settings.nightSleepEnabled === true,
     time: state.settings.nightSleepTime,
     lastKey: 'lastNightTriggerDate'
-  }, grace);
+  });
   /* 夜间刚触发就不再叠午睡（两组设在同一分钟时只弹一次） */
   if (state.sleep && state.sleep.isSleeping) return;
   checkOneSleepSchedule({
@@ -17775,7 +17792,7 @@ function checkSleepSchedules() {
     enabled: state.settings.noonSleepEnabled === true,
     time: state.settings.noonSleepTime,
     lastKey: 'lastNoonTriggerDate'
-  }, grace);
+  });
 }
 
 /* ---------------- 一起睡觉主页 ---------------- */
@@ -17875,19 +17892,15 @@ function renderSleepPage() {
             if (tm) tm.value = c.fallback;
           }
         }
-        /* 改设置时重新起算生效时刻：如果设的正好是“刚刚过去”的时间，今天不追溯触发 */
-        sleepSchedArmedAt = Date.now();
         persist(true);
         syncSchedUI();
-        /* 检查一次：只对“未来到达”的时间点生效，绝不会因为刚打开开关就立刻锁屏 */
+        /* 改完设置立刻按新逻辑校验一次：恰在 ±1 分钟窗口内才会触发，已过窗口自动标记跳过 */
         try { checkSleepSchedules(); } catch (e) { console.warn('[sleep] 定时检查失败：', e); }
       });
       if (tm) tm.addEventListener('change', () => {
         const v = String(tm.value || '');
         if (/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) {
           state.settings[c.timeKey] = v;
-          /* 改时间同样重新起算，避免调到一个刚过去的时间点后被立即锁死 */
-          sleepSchedArmedAt = Date.now();
           persist(true);
         } else {
           tm.value = state.settings[c.timeKey] || c.fallback;
