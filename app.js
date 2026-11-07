@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.7.4';
+const APP_VERSION = 'v8.7.5';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -350,6 +350,75 @@ function packChatMessages(list, assets) {
   return out;
 }
 
+/* ================= 存储极限瘦身（v8.7.5） =================
+ * 语音的 Base64 直接内联在聊天记录里，是撑爆配额的罪魁祸首：
+ *   ① 语音：每个梦角只保留最近 20 条带音频的语音，更早的降级成纯文本
+ *   ② 图片：超过 30 天的图片 / 表情包消息转文本提示（assets 表里的旧图随之被孤儿清理）
+ *   ③ 条数：每个梦角最多保留最近 3000 条，更早的丢弃
+ * 瘦身直接作用在内存数组上，因此界面、落盘、导出看到的内容完全一致。 */
+const VOICE_KEEP_MAX = 20;
+const CHAT_KEEP_MAX = 3000;
+const IMG_KEEP_DAYS = 30;
+const VOICE_EXPIRED_TEXT = '[语音已过期清理]';
+const IMAGE_EXPIRED_TEXT = '[图片已清理，以释放空间]';
+
+function slimChatHistory(list) {
+  if (!Array.isArray(list) || !list.length) return list;
+
+  /* ① 语音降级：从最新往前数，只留最近 20 条音频，其余清掉 Base64 转纯文本 */
+  let voiceSeen = 0;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const m = list[i];
+    if (!m || typeof m !== 'object' || typeof m.voiceBase64 !== 'string' || !m.voiceBase64) continue;
+    voiceSeen++;
+    if (voiceSeen > VOICE_KEEP_MAX) {
+      m.voiceBase64 = '';
+      m.type = 'text';
+      m.content = VOICE_EXPIRED_TEXT;
+    }
+  }
+
+  /* ② 图片清理：超过 30 天的图片 / 表情包消息替换成文本提示 */
+  const cutoff = Date.now() - IMG_KEEP_DAYS * 86400000;
+  for (let i = 0; i < list.length; i++) {
+    const m = list[i];
+    if (!m || typeof m !== 'object') continue;
+    const hasImg = (typeof m.image === 'string' && m.image) ||
+      (Array.isArray(m.images) && m.images.length > 0);
+    if (!hasImg) continue;
+    if (Number(m.ts) && Number(m.ts) < cutoff) {
+      m.image = '';
+      m.images = [];
+      m.type = 'text';
+      m.content = IMAGE_EXPIRED_TEXT;
+    }
+  }
+
+  /* ③ 条数上限：只保留最近 3000 条（导出走内存数据，不受影响） */
+  if (list.length > CHAT_KEEP_MAX) return list.slice(list.length - CHAT_KEEP_MAX);
+  return list;
+}
+
+/* 便宜的聊天指纹：不做 JSON 序列化，只累加关键字段长度，用来判断“这一组聊天是否变化” */
+function chatSignature(list) {
+  if (!Array.isArray(list)) return '0';
+  let h = 0;
+  for (let i = 0; i < list.length; i++) {
+    const m = list[i] || {};
+    h = (h * 33
+      + String(m.id || '').length
+      + String(m.type || '').length
+      + String(m.content || '').length
+      + String(m.text || '').length
+      + String(m.image || '').length
+      + ((Array.isArray(m.images) ? m.images.length : 0) * 3)
+      + String(m.voiceBase64 || '').length
+      + (Number(m.ts) || 0)
+      + (m.read ? 7 : 0)) % 2147483647;
+  }
+  return list.length + ':' + h;
+}
+
 /* 轻量状态快照：聊天 / 字卡 / 书籍正文外置；任何一部分写失败就保留在 kv 里兜底 */
 function buildLightSnapshot(keep) {
   const assets = [];
@@ -385,6 +454,19 @@ function dropLocalStorageSnapshot() {
 /* ---------------- 落盘主流程 ---------------- */
 let heavyHydrateFailed = false;   /* 启动时读分表失败：本轮绝不覆盖分表，改用整包兜底 */
 
+/* 本次运行期已落盘的聊天指纹：key = 梦角 ID，value = 内容签名。
+ * 签名不变就跳过写入，避免“发一条消息 → 全量重写所有角色的聊天记录”。 */
+const chatSaveSig = new Map();
+
+/* 落盘失败的静默处理：只在控制台报警 + 设置页顶部亮一个小红点提醒，
+ * 绝不弹黑框轰炸用户（旧版每发一条消息都可能弹一次） */
+let storageWarn = false;
+function markStorageWarn(err) {
+  if (storageWarn) return;
+  storageWarn = true;
+  console.warn('[存储] 数据落盘失败，已静默降级：请检查浏览器存储空间并尽快导出备份。', err || '');
+}
+
 async function saveStateNow() {
   if (!state) return false;
 
@@ -403,7 +485,7 @@ async function saveStateNow() {
   if (heavyHydrateFailed) {
     const light = Object.assign({}, state);
     const ok = await DB.put(STORE_KV, STATE_KEY, light);
-    if (!ok) showToast('数据读取异常，本次未覆盖存储，请刷新页面后重试');
+    if (!ok) markStorageWarn('读取异常兜底写入失败');
     return ok;
   }
 
@@ -413,13 +495,22 @@ async function saveStateNow() {
   const assets = [];
   assetUsedThisSave = new Set();
 
-  /* ① 聊天记录：按梦角 ID 一条一条存，全量保存、绝不截断 */
+  /* ① 聊天记录：每个梦角一条独立 key（STORE_CHATS / rid）。
+   *   - 落盘前先做极限瘦身：语音只留最近 20 条、超 30 天图片转文本、最多 3000 条
+   *   - packChatMessages 每次都跑：它负责把图片登记进 assets 池，
+   *     漏跑会导致孤儿清理把仍在引用的图片误删
+   *   - 只有指纹真正变化的梦角才写库：发一条消息不会再重写全部角色的几千条历史 */
   const roleIds = Array.from(new Set(state.roles.map(r => r.id).concat(Object.keys(state.chats || {}))));
   for (const rid of roleIds) {
     const list = (state.chats && state.chats[rid]) || [];
-    const packed = packChatMessages(list, assets);
+    const slimmed = slimChatHistory(list);
+    if (slimmed !== list) state.chats[rid] = slimmed;
+    const packed = packChatMessages(slimmed, assets);
+    const sig = chatSignature(packed);
+    if (chatSaveSig.get(rid) === sig) continue;
     const ok = await DB.put(STORE_CHATS, rid, packed);
-    if (!ok) chatsOk = false;
+    if (ok) chatSaveSig.set(rid, sig);
+    else chatsOk = false;
   }
 
   /* ② 一起读书：正文段落单独存（主键 = 书籍 ID），kv 里只留书名/进度等轻量信息 */
@@ -546,7 +637,7 @@ function persist(immediate = false) {
     if (!state) return Promise.resolve(false);
     saveChain = saveChain.then(() => saveStateNow()).catch(() => false);
     return saveChain.then(ok => {
-      if (!ok && Storage.mode !== 'memory') showToast('本地存储写入失败，请检查浏览器存储空间（建议先导出备份）');
+      if (!ok && Storage.mode !== 'memory') markStorageWarn();
       return ok;
     });
   };
@@ -5298,6 +5389,7 @@ async function clearChat(roleId) {
   replyQueue.set(roleId, 0);
   replyBusy.set(roleId, false);
   state.chats[roleId] = [];
+  chatSaveSig.delete(roleId);   /* 清空后必须失效指纹，否则下次保存会被误判为“没变化” */
   state.unread[roleId] = 0;
   state.lastReplies[roleId] = '';
   persist(true);
@@ -9036,6 +9128,7 @@ function csSwitchTab(mode) {
     input.scrollTop = 0;
     input.scrollLeft = 0;
   }
+  csUpdateFontDeleteBtn();   /* 切分类时同步【删除字体】按钮显隐 */
   csUpdatePreview();
 }
 
@@ -9187,6 +9280,62 @@ function csFontLoading(show) {
   }
 }
 
+/* 字体草稿里是否真的存在字体负载：上传过 TTF，或输入框里含 @font-face */
+function csHasFontPayload() {
+  const css = String(currentFontCSS || '');
+  return !!(csLastFontData || /@font-face/i.test(css));
+}
+
+/* 同步【删除字体】按钮的显隐：只在字体分类 + 确实存在字体负载时才出现 */
+function csUpdateFontDeleteBtn() {
+  const btn = $('#csRemoveFont');
+  if (!btn) return;
+  btn.classList.toggle('hidden', !(csTab === 'font' && csHasFontPayload()));
+}
+
+/* 删除已上传的字体：输入框 / 草稿 / localStorage 里的 Base64 / 已应用的字体 CSS
+ * 全部清空，再自动应用一次 → 网站立刻回到默认字体，底部数据真正释放 */
+async function csRemoveFont() {
+  const ok = await confirmDialog(
+    '删除字体',
+    '确定要移除当前上传的字体文件吗？移除后请记得重新点击【应用到全局】。',
+    '删除', true
+  );
+  if (!ok) return;
+
+  /* 1) 隐藏的 file input 必须置空，否则再次选择同一个文件不会触发 change */
+  const fileInput = $('#csFontFile');
+  if (fileInput) { try { fileInput.value = ''; } catch (e) { /* 忽略 */ } }
+
+  /* 2) 输入框与字体草稿一起清空（内存 + savedFontCSS 镜像） */
+  const input = $('#csInput');
+  if (input) { input.value = ''; input.scrollTop = 0; input.scrollLeft = 0; }
+  currentFontCSS = '';
+  csLastFontData = '';                       /* 内存里缓存的字体 dataURL */
+
+  /* 3) 真正释放空间：删除 localStorage 中保存 Base64 的键
+        （savedFontCSS 是字体草稿镜像，其余为历史版本可能残留的字体键） */
+  [CS_LS_KEY_FONT, 'customFont', 'customFontData', 'dc-custom-font'].forEach(k => {
+    try { localStorage.removeItem(k); } catch (e) { /* 忽略 */ }
+  });
+
+  /* 4) 清掉已应用的字体 CSS（IndexedDB 主存储），并重写 localStorage 镜像：
+        否则刷新时 mergeState 会从 dc-custom-css-v1 把旧字体的 Base64 “复活” */
+  const cs = state.beautify.customStyle;
+  cs.applied.font = '';
+  try {
+    localStorage.removeItem('dc-custom-css-v1');
+    localStorage.setItem('dc-custom-css-v1', JSON.stringify({ font: '', bubble: cs.applied.bubble || '' }));
+  } catch (e) { /* 配额不足时忽略，后面 csApplyCurrent 还会再写一次 */ }
+
+  /* 5) 自动应用到全局：注入空内容 → 全站恢复默认字体，同时把干净的状态落盘 */
+  csTab = 'font';
+  csApplyCurrent();
+  csUpdatePreview();
+  csUpdateFontDeleteBtn();
+  showToast('字体已彻底删除，空间已释放');
+}
+
 function csReadFontFile(file) {
   if (!file) return;
   /* 格式粗筛：扩展名或 font/* MIME 至少要过一个，明显不对的文件直接提示 */
@@ -9210,6 +9359,7 @@ function csReadFontFile(file) {
           `${CS_FONT_SELECTOR} { font-family: 'CustomFont', -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif !important; }`);
         const input = $('#csInput');
         if (input) input.value = csGetDraft('font');
+        csUpdateFontDeleteBtn();   /* 上传成功 → 显示【删除字体】 */
         csUpdatePreview();   /* 内部对超大文本已做异步注入 */
         showToast('字体已载入，点【应用到全局】生效');
       } catch (e) {
@@ -9244,10 +9394,12 @@ function customStylePanelHTML() {
         <button class="cs-tab ${csTab === 'font' ? 'active' : ''}" data-cs-tab="font">设置字体样式</button>
         <button class="cs-tab ${csTab === 'bubble' ? 'active' : ''}" data-cs-tab="bubble">设置气泡样式</button>
       </div>
-      <!-- 操作栏：复制模板；字体分类额外显示上传 TTF；清空只清编辑草稿 -->
+      <!-- 操作栏：复制模板；字体分类额外显示上传 TTF / 删除字体；清空只清编辑草稿 -->
       <div class="cs-toolbar">
         <button class="btn ghost" id="csCopyTemplate">复制代码模板</button>
         <button class="btn ghost ${csTab === 'font' ? '' : 'hidden'}" id="csUploadFont">上传 TTF 字体</button>
+        <!-- 删除字体：默认 display:none，上传字体或含 @font-face 代码后才出现 -->
+        <button class="btn ghost cs-del-font hidden" id="csRemoveFont">删除字体</button>
         <button class="btn ghost cs-clear" id="csClear" title="清空输入框">清空</button>
       </div>
       <!-- 代码输入区 -->
@@ -9299,6 +9451,9 @@ function bindCustomStyleEvents() {
     const input = $('#csFontFile');
     if (input) { input.value = ''; input.click(); }
   });
+  /* 删除已上传字体：二次确认 → 清空全部 Base64 → 自动应用恢复默认字体 */
+  const delFontBtn = $('#csRemoveFont');
+  if (delFontBtn) delFontBtn.addEventListener('click', e => { e.stopPropagation(); csRemoveFont(); });
   const fileInput = $('#csFontFile');
   if (fileInput) fileInput.addEventListener('change', () => {
     const file = fileInput.files && fileInput.files[0];
@@ -9310,6 +9465,7 @@ function bindCustomStyleEvents() {
   if (input) input.addEventListener('input', () => {
     /* 按当前 Tab 写入对应变量 + 对应的 localStorage 键，两套内容永不交叉 */
     csSetDraft(csTab, input.value);
+    csUpdateFontDeleteBtn();   /* 粘贴/删掉 @font-face 代码时同步按钮显隐 */
     if (csPreviewTimer) clearTimeout(csPreviewTimer);
     csPreviewTimer = setTimeout(csUpdatePreview, 300);   /* 防抖：边输入边预览 */
   });
@@ -9332,6 +9488,7 @@ function bindCustomStyleEvents() {
     if (load) csLoadPreset(load.dataset.csLoad);
   });
 
+  csUpdateFontDeleteBtn();   /* 进入页面先按当前内容同步【删除字体】按钮显隐 */
   csUpdatePreview();
 }
 
@@ -16647,7 +16804,13 @@ function renderSettingsPage() {
       </div>`;
   }).join('');
 
+  const storageTip = storageWarn ? `
+    <div style="display:flex;align-items:center;gap:8px;margin:0 12px 10px;padding:9px 12px;border-radius:10px;background:rgba(255,59,48,.08);border:1px solid rgba(255,59,48,.18);font-size:12px;color:#B3261E;line-height:1.5;">
+      <span style="width:7px;height:7px;border-radius:50%;background:#FF3B30;flex-shrink:0;"></span>
+      本地存储空间紧张，部分数据可能未能保存，建议先导出备份再清理旧聊天记录。
+    </div>` : '';
   const body = subShell('设置', `
+    ${storageTip}
     <div class="panel">
       <div class="panel-title">我的资料</div>
       <div class="avatar-edit">
@@ -17236,6 +17399,7 @@ async function deleteRole(roleId, closeFn) {
 
   state.roles = state.roles.filter(r => r.id !== roleId);
   delete state.chats[roleId];
+  chatSaveSig.delete(roleId);
   delete state.unread[roleId];
   delete state.lastReplies[roleId];
   delete state.locations[roleId];
@@ -19560,6 +19724,8 @@ async function boot() {
   /* 一起睡觉：刷新前正在睡 → 直接回到全屏遮罩；刷新前刚醒未看结算 → 直接回到结算卡。
      用 try-catch 兜住：睡眠功能出现任何异常都不允许阻塞首屏（Loading 必须照常关闭） */
   try { sleepRestoreOnBoot(); } catch (e) { console.warn('[sleep] 恢复状态失败，已跳过：', e); }
+  /* 每日初见信件：boot 完成、桌面已渲染后再判定，避免被开屏动画或睡眠遮罩打断 */
+  try { maybeShowDailyLetter(); } catch (e) { console.warn('[daily-letter] 初始化失败，已跳过：', e); }
   /* 24h 退回检查：延迟到 UI 渲染与全部事件绑定完成之后执行，绝不阻塞基础交互 */
   setTimeout(() => { try { checkExpiredTransactions(); } catch (e) { /* 忽略 */ } }, 800);
   setInterval(() => {
@@ -19610,6 +19776,89 @@ async function boot() {
   /* 手动测试入口：控制台执行 forceAutoLetter() 或 rdForceAutoLetter() 即可强制收到一封主动来信 */
   window.forceAutoLetter = () => checkAutoLetters(true);
   window.rdForceAutoLetter = window.forceAutoLetter;
+}
+
+/* ===================== 每日初见信件 =====================
+ * 每天第一次打开网页时，弹出一封淡粉色信封；点开后随机抽一张字卡作为问候语。
+ * 日期判定只认“本地日期（YYYY-MM-DD）”与 localStorage 中的 lastDailyLetterDate，
+ * 跨天（哪怕只差 1 分钟到零点）才会重新出现，同一天无论刷新多少次都不会再弹。 */
+const DAILY_LETTER_KEY = 'lastDailyLetterDate';
+const DAILY_LETTER_FALLBACK = '今天也要开心哦。';
+let dailyLetterChecked = false;   /* 每次页面加载只判定一次，避免与 visibilitychange 等重复触发 */
+
+function dailyLetterDayKey() {
+  const d = new Date();
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+}
+
+/* 从主字卡库随机抽 1 张，不做拼接；字卡库为空时用兜底文案 */
+function dailyLetterPickText() {
+  try {
+    const pool = (state.cards || []).filter(c => c && c.enabled !== false &&
+      c.content && String(c.content).trim());
+    if (!pool.length) return DAILY_LETTER_FALLBACK;
+    const txt = String(pickOne(pool).content || '').trim();
+    return txt || DAILY_LETTER_FALLBACK;
+  } catch (e) {
+    return DAILY_LETTER_FALLBACK;
+  }
+}
+
+function maybeShowDailyLetter() {
+  if (dailyLetterChecked) return;
+  dailyLetterChecked = true;
+  const overlay = $('#daily-letter-overlay');
+  if (!overlay) return;
+
+  /* 正在“一起睡觉”时不叠加（睡眠遮罩优先，本次不弹也不标记，醒来后下次打开再说） */
+  if (sleepSilent()) return;
+
+  let last = '';
+  try { last = localStorage.getItem(DAILY_LETTER_KEY) || ''; } catch (e) { last = ''; }
+  const today = dailyLetterDayKey();
+  if (last === today) { overlay.classList.add('hidden'); return; }
+
+  /* 今天第一次打开：先落盘日期，保证无论用户是否真的拆开，今天都只出现这一次 */
+  try { localStorage.setItem(DAILY_LETTER_KEY, today); } catch (e) { /* 隐私模式忽略 */ }
+
+  const envelope = $('#dlEnvelope');
+  const textEl = $('#dlText');
+  const tapEl = $('#dlTap');
+  const acceptBtn = $('#dlAccept');
+  if (textEl) textEl.textContent = dailyLetterPickText();
+  if (envelope) envelope.classList.remove('open');
+  if (tapEl) tapEl.classList.remove('hidden');
+
+  let opened = false;
+  const openLetter = () => {
+    if (opened) return;
+    opened = true;
+    if (envelope) envelope.classList.add('open');
+    if (tapEl) tapEl.classList.add('hidden');
+  };
+  const closeLetter = () => {
+    overlay.classList.add('closing');
+    setTimeout(() => {
+      overlay.classList.remove('show', 'closing');
+      overlay.classList.add('hidden');
+      if (envelope) envelope.classList.remove('open');
+    }, 320);
+  };
+
+  if (envelope) {
+    envelope.addEventListener('click', openLetter);
+    envelope.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openLetter(); }
+    });
+  }
+  if (acceptBtn) {
+    /* 按钮在信封内部，必须阻止冒泡，否则会再次触发信封的拆开逻辑 */
+    acceptBtn.addEventListener('click', e => { e.stopPropagation(); closeLetter(); });
+  }
+
+  overlay.classList.remove('hidden');
+  void overlay.offsetWidth;   /* 强制一次回流，保证淡入过渡生效 */
+  overlay.classList.add('show');
 }
 
 /* ===================== 开屏加载动画时序（Splash Screen） ===================== */

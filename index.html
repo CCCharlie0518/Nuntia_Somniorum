@@ -16,6 +16,25 @@
 <style id="custom-style-injector"></style>
 </head>
 <body>
+<!-- 每日初见信件：每天第一次打开网页时出现；默认隐藏，由 app.js 判定日期后显示。
+     放在 #splash-screen 之前，两者 z-index 相同时开屏动画会盖在信封之上，加载完再自然露出 -->
+<div id="daily-letter-overlay" class="dl-overlay hidden">
+  <div class="dl-stage">
+    <div class="dl-envelope" id="dlEnvelope" role="button" tabindex="0" aria-label="拆开今天的信件">
+      <div class="dl-back"></div>
+      <div class="dl-letter">
+        <div class="dl-hint">你来啦，今天 TA 也在这里等你。</div>
+        <div class="dl-text" id="dlText"></div>
+        <button class="dl-accept" id="dlAccept" type="button">收下心意</button>
+      </div>
+      <div class="dl-front"></div>
+      <div class="dl-flap"></div>
+      <div class="dl-seal">♡</div>
+    </div>
+    <div class="dl-tap" id="dlTap">轻点信封，拆开今天的心意</div>
+  </div>
+</div>
+
 <!-- 开屏加载动画：白底全屏遮罩，首屏即显示；时序（1.5s 浮现 / 3.5s 淡出 / 4.1s 移除）由 app.js 的 runSplash() 控制 -->
 <div id="splash-screen">
   <!-- 浮现区（初始隐藏，整体居中）：Logo + 拉丁文 + 中文标题 -->
