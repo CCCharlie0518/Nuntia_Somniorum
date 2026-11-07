@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.7.5';
+const APP_VERSION = 'v8.8.0';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -817,6 +817,8 @@ function defaultState() {
       chatWallByRole: {},
       spaceWall: '',
       iconTheme: 'blue',
+      /* 自定义字体颜色：浅色主题下文字看不清时单独加深，默认深灰 */
+      customTextColor: '#333333',
       /* 组件外观：磨砂玻璃开关（默认关闭）+ 卡片背景白的不透明度（默认 80%） */
       glassOn: false,
       glassOpacity: 80,
@@ -852,6 +854,15 @@ function defaultState() {
       pendingSummary: false,
       pendingSleepData: null,
       history: []
+    },
+    /* 一起演绎：进行中的存档 / 已完结的存档 / 用户自定义剧本 / 用户自定义分类 / 已删除的内置剧本 id 名单 */
+    acts: {
+      activeActs: [],
+      finishedActs: [],
+      customScenarios: [],
+      userCategories: [],
+      deletedBuiltInScenarios: [],
+      deletedCategories: []
     },
     /* 上次离开页面的时间戳（毫秒）：离线消息横幅据此结算这段时间内的新消息与超时待办 */
     lastSeenAt: 0
@@ -969,6 +980,63 @@ function mergeState(saved) {
     lastChatDate: typeof jdSrc.lastChatDate === 'string' ? jdSrc.lastChatDate : '',
     isDimmed: jdSrc.isDimmed === true
   };
+  /* 一起演绎：旧数据缺字段时补默认结构；存档与自定义剧本逐条归一，杜绝脏数据 */
+  {
+    const actSrc = (out.acts && typeof out.acts === 'object') ? out.acts : {};
+    /* 自定义分类：去重去空、限长、不得与内置分类重名 */
+    const userCats = [];
+    (Array.isArray(actSrc.userCategories) ? actSrc.userCategories : []).forEach(c => {
+      const v = String(c || '').trim().slice(0, 8);
+      if (v && !ACT_CATEGORIES.includes(v) && !userCats.includes(v)) userCats.push(v);
+    });
+    /* 分类归一：旧版 key 迁移为中文分类名；除此之外保留原分类名——即使所属分类已被删除，
+     * 剧本也只是暂时隐藏（不删不改），日后新建同名分类会自动重新显示 */
+    const normCat = c => {
+      let v = String(c || '');
+      if (ACT_CAT_MIGRATION[v]) v = ACT_CAT_MIGRATION[v];
+      return v || ACT_CATEGORIES[0];
+    };
+    const normAct = a => ({
+      actId: String(a.actId || uid()),
+      scenarioId: String(a.scenarioId || ''),
+      scenarioTitle: String(a.scenarioTitle || '未命名剧本').slice(0, 30),
+      category: normCat(a.category),
+      taRole: String(a.taRole || ''),
+      userRole: String(a.userRole || ''),
+      opening: String(a.opening || ''),
+      roleId: String(a.roleId || ''),
+      chatHistory: Array.isArray(a.chatHistory) ? a.chatHistory.filter(m => m && m.text != null).map(m => ({
+        id: String(m.id || uid()),
+        sender: m.sender === 'me' ? 'me' : 'ta',
+        text: String(m.text == null ? '' : m.text),
+        ts: Number(m.ts) || Date.now()
+      })) : [],
+      startTime: Number(a.startTime) || Date.now(),
+      endTime: Number(a.endTime) || 0
+    });
+    out.acts = {
+      activeActs: Array.isArray(actSrc.activeActs) ? actSrc.activeActs.filter(a => a && typeof a === 'object').map(normAct) : [],
+      finishedActs: Array.isArray(actSrc.finishedActs) ? actSrc.finishedActs.filter(a => a && typeof a === 'object').map(normAct) : [],
+      customScenarios: Array.isArray(actSrc.customScenarios) ? actSrc.customScenarios.filter(s => s && s.title && s.opening).map(s => ({
+        id: String(s.id || ('cus-' + uid())),
+        category: normCat(s.category),
+        title: String(s.title || '').slice(0, 30),
+        taRole: String(s.taRole || '').slice(0, 60),
+        userRole: String(s.userRole || '').slice(0, 60),
+        opening: String(s.opening || ''),
+        ts: Number(s.ts) || Date.now()
+      })) : [],
+      userCategories: userCats,
+      /* 已删除的内置剧本 id 名单：去重去空，只保留字符串 */
+      deletedBuiltInScenarios: Array.isArray(actSrc.deletedBuiltInScenarios)
+        ? Array.from(new Set(actSrc.deletedBuiltInScenarios.map(x => String(x || '')).filter(Boolean)))
+        : [],
+      /* 已删除的内置分类名单：只认真实内置分类名，去重 */
+      deletedCategories: Array.isArray(actSrc.deletedCategories)
+        ? Array.from(new Set(actSrc.deletedCategories.map(x => String(x || '')).filter(v => ACT_CATEGORIES.includes(v))))
+        : []
+    };
+  }
   /* 旧版日常提醒没有长期字段：补默认值（isLongTerm=false，startDate/endDate=date），保证区间判断统一 */
   out.dailyReminders = out.dailyReminders.map(r => {
     if (!r || typeof r !== 'object') return r;
@@ -1393,6 +1461,8 @@ function mergeState(saved) {
   out.beautify.glassOn = out.beautify.glassOn === true;
   const glassOp = Number(out.beautify.glassOpacity);
   out.beautify.glassOpacity = Number.isFinite(glassOp) ? clamp(Math.round(glassOp), 0, 100) : 80;
+  /* 自定义字体颜色：只接受 #rrggbb，非法值兜底深灰 */
+  out.beautify.customTextColor = /^#[0-9a-fA-F]{6}$/.test(String(out.beautify.customTextColor || '')) ? out.beautify.customTextColor : '#333333';
   /* 桌面分页归属与顺序：旧 homeAppOrder（一维数组）按默认分页映射迁移；新入口归入默认页 */
   out.homePages = migrateHomePages(src);
   delete out.homeAppOrder;
@@ -1759,6 +1829,60 @@ function openThemeColorPicker() {
     const v = /^#[0-9a-fA-F]{6}$/.test(String(input.value || '')) ? String(input.value) : cur;
     closeThemeColorPicker();
     setGlobalThemeColor(v);
+  });
+  mask.querySelector('#tpCancel').addEventListener('click', closeThemeColorPicker);
+  /* 点击面板外的黑色遮罩关闭，不应用任何颜色 */
+  mask.addEventListener('click', e => { if (e.target === mask) closeThemeColorPicker(); });
+  mask.addEventListener('touchmove', e => { if (e.target === mask) e.preventDefault(); }, { passive: false });
+  document.addEventListener('keydown', onThemePickerKey);
+}
+
+/* ===== 自定义字体颜色：与主题颜色同一套「确认后生效」交互 ===== */
+/* 唯一应用字体颜色的入口：点【确认】或点预设色块时才会调用 */
+function setCustomTextColor(hex) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(String(hex || ''))) return;
+  state.beautify.customTextColor = String(hex);
+  applyBeautify();                 /* 写入 html 根节点 --custom-text-color，全局文字统一变色 */
+  persist();                       /* 落盘 */
+  const r = (typeof currentRoute !== 'undefined' && currentRoute) || {};
+  if (r.page === 'sub' && r.name === 'beautify') renderBeautifyPage();   /* 回显高亮 */
+}
+
+/* 打开字体颜色取色面板：复用主题取色面板整套样式与关闭逻辑（同一遮罩 id），拖动只改面板内预览 */
+function openTextColorPicker() {
+  closeThemeColorPicker();   /* 同一遮罩 id，先确保旧面板关闭 */
+  const curTc = String(state.beautify.customTextColor || '#333333');
+  const cur = /^#[0-9a-fA-F]{6}$/.test(curTc) ? curTc : '#333333';
+  const mask = document.createElement('div');
+  mask.className = 'theme-picker-mask';
+  mask.id = 'themePickerMask';
+  mask.innerHTML = `
+    <div class="theme-picker-box" role="dialog" aria-modal="true" aria-label="自定义字体颜色">
+      <div class="tp-head">自定义字体颜色</div>
+      <div class="tp-preview" id="tpPreview" style="background:${cur}"><span id="tpHex">${cur.toUpperCase()}</span></div>
+      <input class="tp-color" type="color" id="tpInput" value="${cur}" aria-label="选择颜色">
+      <div class="tp-tip">选色只在本面板预览，点【确认】才会应用到全局文字</div>
+      <div class="tp-actions">
+        <button class="tp-btn tp-cancel" id="tpCancel" type="button">取消</button>
+        <button class="tp-btn tp-ok" id="tpOk" type="button">确认</button>
+      </div>
+    </div>`;
+  document.body.appendChild(mask);
+  document.documentElement.classList.add('tp-lock');   /* 锁定底层滚动，防止穿透 */
+
+  const input = mask.querySelector('#tpInput');
+  const preview = mask.querySelector('#tpPreview');
+  const hexLabel = mask.querySelector('#tpHex');
+  /* 高频 input 只更新面板内的小色块与色值文字：不改全局变量、不保存、不重渲染 */
+  input.addEventListener('input', e => {
+    const v = /^#[0-9a-fA-F]{6}$/.test(String(e.target.value || '')) ? String(e.target.value) : cur;
+    preview.style.background = v;
+    hexLabel.textContent = v.toUpperCase();
+  });
+  mask.querySelector('#tpOk').addEventListener('click', () => {
+    const v = /^#[0-9a-fA-F]{6}$/.test(String(input.value || '')) ? String(input.value) : cur;
+    closeThemeColorPicker();
+    setCustomTextColor(v);
   });
   mask.querySelector('#tpCancel').addEventListener('click', closeThemeColorPicker);
   /* 点击面板外的黑色遮罩关闭，不应用任何颜色 */
@@ -6046,7 +6170,9 @@ const APP_ICONS = {
   /* 记录心情：心电图爱心（专属图标，避免与表情包笑脸撞车；尺寸由 .plus-cell svg 统一控制） */
   mood: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path><polyline points="6 12 9 12 11 9 14 15 16 12 19 12"></polyline></svg>',
   /* 检查更新：线条风循环刷新（尺寸与描边由 .app-update-btn svg 统一控制） */
-  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>'
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
+  /* 一起演绎：线条风剧本/场记板（规格指定 SVG，禁用 Emoji） */
+  acts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 24px; height: 24px; margin-bottom: 4px;"><path d="M4 4h16v16H4z"></path><path d="M4 8h16"></path><path d="M8 4v4"></path><path d="M16 4v4"></path><path d="M12 12h4"></path><path d="M12 16h4"></path><path d="M8 12h.01"></path><path d="M8 16h.01"></path></svg>'
 };
 
 const HOME_APPS = [
@@ -7698,7 +7824,13 @@ function jarEncourage(jd) {
   return '每一百句悄悄话，都会化作瓶中的星光。';
 }
 
-/* 拾光瓶二级页：顶部数据面板 + 中央玻璃瓶 + 底部进度；布局确定性伪随机，重绘不跳动 */
+/* 索引种子伪随机：同一索引每次渲染结果恒定（刷新/重绘星星位置永不跳动），无需存储坐标 */
+function jarRand(i, salt) {
+  const x = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+/* 拾光瓶二级页：顶部数据面板 + 中央玻璃瓶 + 底部进度；瓶内星星按索引种子随机散落，重绘不跳动 */
 function renderJarPage() {
   const jd = state.jarData || { stars: 0, totalMessages: 0, streakDays: 0, lastChatDate: '', isDimmed: false };
   const total = Math.max(0, Math.floor(jd.stars) || 0);
@@ -7707,11 +7839,14 @@ function renderJarPage() {
   jarDropPending = false;   /* 动画类名已写入本次 HTML，立即清除标记，避免下次重绘重复播放 */
   let stars = '';
   for (let i = 0; i < n; i++) {
-    const left = 6 + ((i * 37 + 11) % 72);               /* 6% ~ 78%，层内横向错开 */
-    const bottom = 6 + Math.floor(i / 6) * 16 + ((i * 17) % 5);  /* 每 6 颗叠一层，层内 ±4px 错落 */
-    const size = 15 + ((i * 7) % 7);                     /* 15 ~ 21px */
+    /* 以索引 i 为种子的伪随机散落：left/bottom/角度/大小/透明度逐颗固定，老星星位置永远不变 */
+    const left = (15 + jarRand(i, 1) * 70).toFixed(2);   /* 15% ~ 85%，占瓶内中间约 70% 宽 */
+    const bottom = (5 + jarRand(i, 2) * 55).toFixed(2);  /* 5% ~ 60%，不飘出瓶口 */
+    const size = 14 + Math.round(jarRand(i, 3) * 8);     /* 14 ~ 22px 大小错落 */
+    const rot = (jarRand(i, 4) * 40 - 20).toFixed(1);    /* -20° ~ 20° 随机倾斜 */
+    const op = (0.6 + jarRand(i, 5) * 0.4).toFixed(2);   /* 0.6 ~ 1 透明度分层 */
     const bd = (2 + ((i * 13) % 10) * 0.14).toFixed(2);  /* 呼吸周期 2.0 ~ 3.3s，各不相同 */
-    stars += `<span class="jar-star${i === dropIdx ? ' drop' : ''}" style="left:${left}%;bottom:${bottom}px;font-size:${size}px;--bd:${bd}s">${i % 4 === 3 ? '⭐' : '✨'}</span>`;
+    stars += `<span class="jar-star${i === dropIdx ? ' drop' : ''}" style="left:${left}%;bottom:${bottom}%;font-size:${size}px;--rot:${rot}deg;--op:${op};--bd:${bd}s">${i % 4 === 3 ? '⭐' : '✨'}</span>`;
   }
   /* 距离下一颗星：100 - (累计 % 100)；余数为 0 时新一轮刚开始，差 100 句 */
   const remain = 100 - (jd.totalMessages % 100);
@@ -8377,6 +8512,9 @@ function applyBeautify() {
     app.style.setProperty('--glass-bg-opacity', String((Number.isFinite(gOp) ? gOp : 80) / 100));
     app.style.setProperty('--glass-blur', '16px');
   }
+  /* 自定义字体颜色：写入根变量，全局 var(--custom-text-color) 立即生效（boot 时也会走到这里，刷新自动恢复） */
+  const tc = /^#[0-9a-fA-F]{6}$/.test(String(b.customTextColor || '')) ? b.customTextColor : '#333333';
+  document.documentElement.style.setProperty('--custom-text-color', tc);
   const setWall = (el, value) => {
     if (!el) return;
     const bg = wallBackground(value);
@@ -8550,6 +8688,9 @@ function applyCustomStyleInline(b) {
   const bubbleEl = csInjector('bubble');
   fontEl.textContent = font || '';
   bubbleEl.textContent = bubble || '';
+  /* 有自定义气泡时给 body 打标：CSS 里用 body.cs-bubble-on 兜底，
+     让未指定文字颜色的气泡默认改用深色变量，而不是主题底白字（用户显式写的 color 带 !important，仍优先） */
+  document.body.classList.toggle('cs-bubble-on', !!bubble);
   /* 自定义气泡常把背景改成浅色：立刻按页面上第一张卡片的真实背景重算文字色，
      避免转账 / 送礼 / 定位 / 心情卡仍是白字看不清（无卡片时保持现有值） */
   try { syncCardTextColorFromDom(); } catch (e) { /* 忽略，不影响注入 */ }
@@ -9508,6 +9649,13 @@ function renderBeautifyPage() {
   const themeIs = c => themeHex.toLowerCase() === String(c).toLowerCase();
   const themeLabel = (THEME_PRESETS.find(p => themeIs(p.c)) || {}).n || themeHex.toUpperCase();
 
+  /* 字体颜色：交互与主题颜色完全对齐——预设即点即用；当前色不在预设中时，【＋】号高亮并显示该自定义色 */
+  const curTc = String(b.customTextColor || '#333333');
+  const tcHex = /^#[0-9a-fA-F]{6}$/.test(curTc) ? curTc : '#333333';
+  const tcIs = c => tcHex.toLowerCase() === String(c).toLowerCase();
+  const tcCustom = !TEXT_COLOR_PRESETS.some(p => tcIs(p.c));
+  const tcLabel = (TEXT_COLOR_PRESETS.find(p => tcIs(p.c)) || {}).n || tcHex.toUpperCase();
+
   subShell('美化', `
     <div class="panel">
       <div class="panel-title">桌面壁纸</div>
@@ -9547,6 +9695,15 @@ function renderBeautifyPage() {
         <button class="color-custom" id="themeCustomBtn" type="button" title="自定义颜色" aria-label="自定义颜色">＋</button>
       </div>
       <div class="muted" id="themeColorText" style="margin-top:8px;font-size:12px">当前主题色：${themeLabel}</div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">字体颜色</div>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">点击色块立即应用；自定义颜色会先弹出取色面板，点【确认】后才生效</div>
+      <div class="color-row">
+        ${TEXT_COLOR_PRESETS.map(p => `<button class="color-dot ${tcIs(p.c) ? 'active' : ''}" data-txcolor="${p.c}" title="${p.n}" aria-label="${p.n}" style="background:${p.c}"></button>`).join('')}
+        <button class="color-custom ${tcCustom ? 'active' : ''}" id="textColorCustomBtn" type="button" title="自定义颜色" aria-label="自定义颜色"${tcCustom ? ` style="background:${tcHex}"` : ''}>＋</button>
+      </div>
+      <div class="muted" id="textColorText" style="margin-top:8px;font-size:12px">当前字体颜色：${tcLabel}</div>
     </div>
     <div class="panel">
       <div class="panel-title">图标主题</div>
@@ -9599,6 +9756,12 @@ function renderBeautifyPage() {
   $$('[data-tcolor]').forEach(btn => btn.addEventListener('click', () => setGlobalThemeColor(btn.dataset.tcolor)));
   const themeCustomBtn = $('#themeCustomBtn');
   if (themeCustomBtn) themeCustomBtn.addEventListener('click', openThemeColorPicker);
+
+  /* 字体颜色：交互完全对齐主题颜色——预设色块即点即用；
+   * 【＋】号打开「确认后生效」取色弹窗：拖动只改弹窗内预览，点【确认】才应用/保存/重绘 */
+  $$('[data-txcolor]').forEach(btn => btn.addEventListener('click', () => setCustomTextColor(btn.dataset.txcolor)));
+  const tcCustomBtn = $('#textColorCustomBtn');
+  if (tcCustomBtn) tcCustomBtn.addEventListener('click', openTextColorPicker);
 
   /* 组件外观：磨砂开关 + 透明度滑块，实时写 CSS 变量并持久化 */
   const glassOnEl = $('#glassOn');
@@ -9693,7 +9856,7 @@ function renderBeautifyPage() {
   $('#beautyReset').addEventListener('click', async () => {
     const ok = await confirmDialog('恢复默认外观', '将清除所有壁纸与图标主题设置。', '恢复', true);
     if (!ok) return;
-    state.beautify = { deskWall: '', chatWallGlobal: '', chatWallByRole: {}, spaceWall: '', iconTheme: 'blue', glassOn: false, glassOpacity: 80,
+    state.beautify = { deskWall: '', chatWallGlobal: '', chatWallByRole: {}, spaceWall: '', iconTheme: 'blue', customTextColor: '#333333', glassOn: false, glassOpacity: 80,
       /* 自定义样式一并清空，但保留用户保存的预设 */
       customStyle: { tab: 'font', applied: { font: '', bubble: '' }, presets: (state.beautify.customStyle && state.beautify.customStyle.presets) || [] } };
     persist();
@@ -11677,6 +11840,8 @@ function renderSub(name) {
     case 'play': return renderPlayPage();            /* 一起玩：一起做 → 一起玩 → 五子棋 的二级页 */
     case 'games': return renderPlayPage();           /* 旧路由兜底：桌面小游戏已并入【一起玩】 */
     case 'readtogether': return renderReadTogetherPage();
+    case 'acts': return renderActsPage();            /* 一起演绎：一起做 → 一起演绎 的二级页 */
+    case 'actroom': return renderActRoomPage();      /* 演绎房间：进行中聊天 / 已完结只读回顾 */
     case 'listen': return renderListenPage();
     case 'sleep': return renderSleepPage();          /* 一起睡觉：一起做 → 一起睡觉 的二级页 */
     case 'jar': return renderJarPage();
@@ -16789,6 +16954,16 @@ const THEME_PRESETS = [
   { c: '#FF5E57', n: '珊瑚红' }
 ];
 
+/* 【美化 - 字体颜色】深色预设色块：解决浅色主题下文字对比度不足，点选即写入 --custom-text-color */
+const TEXT_COLOR_PRESETS = [
+  { c: '#333333', n: '深灰' },
+  { c: '#000000', n: '纯黑' },
+  { c: '#1E3A8A', n: '深蓝' },
+  { c: '#4C1D95', n: '深紫' },
+  { c: '#451A03', n: '深褐' },
+  { c: '#7F1D1D', n: '暗红' }
+];
+
 function renderSettingsPage() {
   const my = state.my;
   const s = state.settings;
@@ -17597,6 +17772,14 @@ function renderReadTogetherPage() {
       </div>
       <div class="arrow">›</div>
     </button>
+    <button class="rt-entry-card" data-rt-acts>
+      <div class="ic">${APP_ICONS.acts}</div>
+      <div class="txt">
+        <div class="t">一起演绎</div>
+        <div class="d">${state.acts && state.acts.activeActs.length ? state.acts.activeActs.length + ' 段演绎进行中 · 点击继续' : '和 ' + roleName + ' 演绎一段属于你们的剧本'}</div>
+      </div>
+      <div class="arrow">›</div>
+    </button>
     <div class="rt-more">更多一起做功能，敬请期待…</div>
   `);
   const entry = $('[data-rt-read]', body);
@@ -17616,6 +17799,400 @@ function renderReadTogetherPage() {
   /* 一起睡觉：进入睡眠主页（开始睡觉 + 历史记录） */
   const sleepEntry = $('[data-rt-sleep]', body);
   if (sleepEntry) sleepEntry.addEventListener('click', () => navigate({ page: 'sub', name: 'sleep' }));
+  /* 一起演绎：进入演绎主界面（分类情景 + 存档管理） */
+  const actsEntry = $('[data-rt-acts]', body);
+  if (actsEntry) actsEntry.addEventListener('click', () => navigate({ page: 'sub', name: 'acts' }));
+}
+
+/* =========================================================
+ * 二十三·五·二、一起演绎
+ * 四大分类内置情景 + 用户自定义情景 + 多存档进度管理 + 演绎专属聊天框 + 历史回顾。
+ * 演绎聊天与主聊天完全隔离：消息只写入对应 actId 的 chatHistory，绝不触碰 state.chats；
+ * TA 回复复用主字卡抽取逻辑（composeCardText），用 act 专属 key 做防复读，互不干扰。
+ * ========================================================= */
+/* 内置分类（固定 3 个，不可删）；用户自定义分类存 state.acts.userCategories，Tab 栏 = 内置 + 用户分类 + 尾部【+】 */
+const ACT_CATEGORIES = ['现代日常', '架空幻想', '特殊关系'];
+/* 旧版分类 key → 中文分类名（老用户数据迁移用，见 mergeState）；已废弃的「自定义」统一归入第一个内置分类 */
+const ACT_CAT_MIGRATION = { daily: '现代日常', ifline: '架空幻想', tension: '特殊关系', fantasy: '架空幻想', custom: '现代日常', '自定义': '现代日常' };
+/* 可见分类 = 未被删除的内置分类 + 用户自定义分类（Tab 栏与下拉都走这里） */
+const actAllCats = () => ACT_CATEGORIES.filter(c => !state.acts.deletedCategories.includes(c)).concat(state.acts.userCategories);
+/* 分类归一：不在可见分类中的一律归入第一个可见分类（运行时新建剧本用；一个都不剩时兜底'现代日常'，反正也渲染不出） */
+const actNormCat = c => {
+  let v = String(c || '');
+  if (ACT_CAT_MIGRATION[v]) v = ACT_CAT_MIGRATION[v];
+  return actAllCats().includes(v) ? v : (actAllCats()[0] || ACT_CATEGORIES[0]);
+};
+/* 线条风「＋」图标：右上角【新建剧本】与 Tab 栏尾部【新建分类】按钮专用（禁用 Emoji） */
+const ACT_ICON_PLUS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>';
+/* 线条风小垃圾桶图标：剧本卡片右上角的极小删除按钮（禁用 Emoji） */
+const ACT_ICON_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
+
+/* 内置剧本库：opening 为剧本背景/开场介绍，只展示在演绎房间顶部的黄色卡片中，绝不进入聊天记录 */
+const SCENARIO_LIBRARY = [
+  /* 现代日常 */
+  { id: 'daily-sick',     category: '现代日常', title: '生病照顾',   opening: '你发了一条朋友圈说发烧了，没过多久，门铃响了……' },
+  { id: 'daily-rain',     category: '现代日常', title: '雨天共伞',   opening: '突如其来的大雨把你们困在了屋檐下，TA撑开了一把伞，把你拉进伞里……' },
+  { id: 'daily-cook',     category: '现代日常', title: '一起做饭',   opening: '你们决定周末在家自己做饭，TA系着围裙，正在和一块难切的牛肉较劲……' },
+  { id: 'daily-insomnia', category: '现代日常', title: '深夜失眠',   opening: '凌晨两点，你翻来覆去睡不着，TA察觉到动静，迷迷糊糊地伸手把你搂了过去……' },
+  { id: 'daily-date',     category: '现代日常', title: '第一次约会', opening: '今天是你们第一次正式约会，TA早早地等在了约好的地点，手里还拿着一束花……' },
+  /* 架空幻想 */
+  { id: 'if-vampire',     category: '架空幻想', title: '吸血鬼',     opening: '在一个月色极好的夜晚，你误入了一座古堡，而TA正坐在王座上，眼底闪着红光看着你……' },
+  { id: 'if-apocalypse',  category: '架空幻想', title: '末世求生',   opening: '丧尸爆发了，TA把你护在身后，手里的刀还在滴血，周围全是嘶吼声……' },
+  { id: 'if-abo',         category: '架空幻想', title: '星际ABO',    opening: '你是刚被分配到联邦战舰的新兵，而TA是那位以冷酷著称的顶级Alpha舰长……' },
+  { id: 'if-palace',      category: '架空幻想', title: '古代宫廷',   opening: '你是被送入东宫的秀女，而TA是那个传闻中杀伐果断的太子，今夜是他翻你牌子的日子……' },
+  { id: 'fan-deity',      category: '架空幻想', title: '神明与信徒', opening: '作为神明，你感应到了你唯一信徒的濒死呼唤，当你降临在TA面前时，TA正跪在血泊中……' },
+  { id: 'fan-mermaid',    category: '架空幻想', title: '人鱼',       opening: '你在海边救了一条受伤的人鱼，TA醒来后，用极其空灵的嗓音问你：“人类，你叫什么名字？”' },
+  /* 特殊关系 */
+  { id: 'ten-reunion',    category: '特殊关系', title: '破镜重圆', opening: '三年后，你们在陌生的城市街头偶遇，四目相对的瞬间，时间仿佛静止了……' },
+  { id: 'if-campus',      category: '特殊关系', title: '校园暗恋', opening: '午后的操场，TA打完篮球满身是汗地朝你走来，在一众起哄声中，递给你一瓶冰水……' },
+  { id: 'ten-coldwar',    category: '特殊关系', title: '吵架冷战', opening: '你们因为一件小事大吵了一架，现在背对着背坐在沙发两头，谁也不理谁……' },
+  { id: 'rel-arranged',   category: '特殊关系', title: '先婚后爱', opening: '家族安排的联姻，新婚第一晚，TA把一杯热牛奶放在你手边，别过脸说：“以后，请多指教。”' }
+];
+
+let actTab = '现代日常';        /* 主界面当前分类 Tab（内存态，不持久化） */
+let actRoomId = '';             /* 当前打开的演绎存档 actId */
+let actRoomMode = 'active';     /* 'active' 进行中可发言 | 'finished' 已完结只读回顾 */
+
+/* 演绎使用的梦角：跟随当前激活梦角（与一起做其它模块一致） */
+function actRoleId() {
+  return state.activeRoleId || (state.roles[0] && state.roles[0].id) || '';
+}
+/* 在进行中与已完结里一起找存档 */
+function findAct(actId) {
+  const a = state.acts.activeActs.find(x => x.actId === actId);
+  if (a) return { act: a, done: false };
+  const f = state.acts.finishedActs.find(x => x.actId === actId);
+  if (f) return { act: f, done: true };
+  return null;
+}
+/* 情景查找：内置库 + 自定义库 */
+function findScenario(id) {
+  return SCENARIO_LIBRARY.find(s => s.id === id)
+      || state.acts.customScenarios.find(s => s.id === id)
+      || null;
+}
+/* 旧存档首条可能是历史版本自动推入的开场白气泡：渲染与计数时统一过滤（原始数据保留不删） */
+const actVisibleMsgs = act => act.chatHistory.filter((m, i) => !(i === 0 && m.sender === 'ta' && m.text === act.opening));
+
+/* ---------- 【一起演绎】主界面 ---------- */
+function renderActsPage() {
+  const A = state.acts;
+  const allCats = actAllCats();
+  if (!allCats.includes(actTab)) actTab = allCats[0] || '';   /* 当前 Tab 被删时回退到第一个可见分类；全删光则为空态 */
+  /* 存档卡：主体点击进入/回顾，右上角小字【删除】独立于主体（阻止冒泡 + 二次确认） */
+  const saveCard = (a, done) => `
+    <div class="act-save-wrap">
+      <button class="act-save-card ${done ? 'finished' : ''}" data-act-${done ? 'review' : 'open'}="${a.actId}">
+        <div class="t">${esc(a.scenarioTitle)}</div>
+        <div class="d">${actVisibleMsgs(a).length} 条对话 · ${done ? fmtListTime(a.endTime) + ' 完结' : fmtListTime(a.startTime) + ' 开始'}</div>
+      </button>
+      <button class="act-save-del" data-act-save-del="${a.actId}" type="button">删除</button>
+    </div>`;
+  /* 剧本卡片（内置/自定义统一结构）：主体点击进入确认，右上角极小垃圾桶删除钮；自定义剧本带分类角标 */
+  const scCard = (s, custom) => `
+    <div class="act-card ${custom ? 'custom' : ''}">
+      <button class="act-card-main" data-act-start="${s.id}">
+        <div class="t">${esc(s.title)}${custom ? `<span class="act-tag">${esc(s.category)}</span>` : ''}</div>
+        <div class="d">${esc(s.opening)}</div>
+      </button>
+      <button class="act-del" data-act-scdel="${s.id}" type="button" title="删除剧本">${ACT_ICON_TRASH}</button>
+    </div>`;
+  /* Tab 严格按分类过滤：内置剧本（剔除已删除名单）+ 归入该分类的自定义剧本 */
+  const builtins = SCENARIO_LIBRARY.filter(s => s.category === actTab && !A.deletedBuiltInScenarios.includes(s.id));
+  const customs = A.customScenarios.filter(s => s.category === actTab);
+  const cards = builtins.map(s => scCard(s, false)).join('') + customs.map(s => scCard(s, true)).join('')
+    || (allCats.length
+      ? '<div class="act-empty">该分类下还没有剧本，点右上角【＋ 新建剧本】创作一个吧</div>'
+      : '<div class="act-empty">暂无分类，请点击 + 号新建</div>');
+  const body = subShell('一起演绎', `
+    <div class="act-tabs">${allCats.map(c => `<button class="act-tab ${actTab === c ? 'active' : ''}" data-acttab="${esc(c)}">${esc(c)}</button>`).join('')}<button class="act-tab-add" id="actTabAddBtn" type="button" title="新建分类">${ACT_ICON_PLUS}</button></div>
+    <div class="act-progress">
+      <div class="act-progress-title">进行中（${A.activeActs.length}）</div>
+      ${A.activeActs.length ? A.activeActs.map(a => saveCard(a, false)).join('') : '<div class="act-empty">暂无进行中的演绎</div>'}
+      <div class="act-progress-title">已完结（${A.finishedActs.length}）</div>
+      ${A.finishedActs.length ? A.finishedActs.map(a => saveCard(a, true)).join('') : '<div class="act-empty">暂无已完结的演绎</div>'}
+    </div>
+    <div class="act-list">${cards}</div>
+  `, `<div class="act-top-btns">
+       <button class="act-top-btn" id="actNewBtn" type="button">${ACT_ICON_PLUS}<span>新建剧本</span></button>
+     </div>`);
+
+  /* Tab 点击切换分类；任意分类（含内置）都支持长按删除（600ms，触屏/鼠标均可） */
+  $$('[data-acttab]', body).forEach(btn => {
+    const cat = btn.dataset.acttab;
+    let lpTimer = null, lpFired = false;
+    const lpStart = () => {
+      lpFired = false;
+      lpTimer = setTimeout(() => { lpTimer = null; lpFired = true; actDeleteCategory(cat); }, 600);
+    };
+    const lpCancel = () => { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } };
+    btn.addEventListener('touchstart', lpStart, { passive: true });
+    btn.addEventListener('touchend', lpCancel);
+    btn.addEventListener('touchmove', lpCancel);
+    btn.addEventListener('mousedown', lpStart);
+    btn.addEventListener('mouseup', lpCancel);
+    btn.addEventListener('mouseleave', lpCancel);
+    btn.addEventListener('contextmenu', e => e.preventDefault());
+    btn.addEventListener('click', () => {
+      if (lpFired) { lpFired = false; return; }   /* 长按已触发删除流程，屏蔽随后的点击切换 */
+      actTab = cat; renderActsPage();
+    });
+  });
+  $$('[data-act-open]', body).forEach(btn => btn.addEventListener('click', () => {
+    actRoomId = btn.dataset.actOpen; actRoomMode = 'active';
+    navigate({ page: 'sub', name: 'actroom' });
+  }));
+  $$('[data-act-review]', body).forEach(btn => btn.addEventListener('click', () => {
+    actRoomId = btn.dataset.actReview; actRoomMode = 'finished';
+    navigate({ page: 'sub', name: 'actroom' });
+  }));
+  /* 删除存档：阻止冒泡避免误入回顾；确认后按 actId 从进行中/已完结过滤掉并持久化 */
+  $$('[data-act-save-del]', body).forEach(btn => btn.addEventListener('click', async e => {
+    e.stopPropagation();
+    const found = findAct(btn.dataset.actSaveDel);
+    if (!found) return;
+    if (!(await confirmDialog('删除演绎', '确定要删除这个演绎进度吗？删除后不可恢复。', '删除', true))) return;
+    if (found.done) state.acts.finishedActs = state.acts.finishedActs.filter(x => x.actId !== found.act.actId);
+    else state.acts.activeActs = state.acts.activeActs.filter(x => x.actId !== found.act.actId);
+    persist();
+    showToast('已删除');
+    renderActsPage();
+  }));
+  /* 点击剧本卡（内置/自定义通用）：先弹二次确认，点【进入】才正式开启演绎 */
+  $$('[data-act-start]', body).forEach(btn => btn.addEventListener('click', async () => {
+    const sc = findScenario(btn.dataset.actStart);
+    if (!sc) return;
+    if (!(await confirmDialog('进入剧本', `是否进入剧本【${sc.title}】？`, '进入'))) return;
+    startAct(sc.id);
+  }));
+  /* 删除剧本（内置/自定义统一入口）：阻止冒泡 + 二次确认；
+   * 内置 → id 记入 deletedBuiltInScenarios 名单（持久化，刷新不再出现）；
+   * 自定义 → 直接从 customScenarios 过滤掉；两者都不影响已保存的演绎记录（快照） */
+  $$('[data-act-scdel]', body).forEach(btn => btn.addEventListener('click', async e => {
+    e.stopPropagation();
+    const id = btn.dataset.actScdel;
+    const sc = findScenario(id);
+    if (!sc) return;
+    if (!(await confirmDialog('删除剧本', `确定要删除剧本【${sc.title}】吗？此操作不会影响已保存的演绎记录，但该剧本将从库中永久移除。`, '删除', true))) return;
+    if (SCENARIO_LIBRARY.some(s => s.id === id)) {
+      if (!state.acts.deletedBuiltInScenarios.includes(id)) state.acts.deletedBuiltInScenarios.push(id);
+    } else {
+      state.acts.customScenarios = state.acts.customScenarios.filter(s => s.id !== id);
+    }
+    persist();
+    showToast('剧本已删除');
+    renderActsPage();
+  }));
+  const newBtn = $('#actNewBtn');
+  if (newBtn) newBtn.addEventListener('click', openActScenarioModal);
+  const tabAddBtn = $('#actTabAddBtn', body);
+  if (tabAddBtn) tabAddBtn.addEventListener('click', openActAddCategoryModal);
+}
+
+/* ---------- 进入演绎：生成 activeAct 存档，聊天记录初始为空（开场白只在顶部卡片展示） ---------- */
+function startAct(scenarioId) {
+  const sc = findScenario(scenarioId);
+  if (!sc) return;
+  if (!state.roles.length) { showToast('先去联系人页添加一个梦角吧'); return; }
+  const act = {
+    actId: uid(),
+    scenarioId: sc.id,
+    scenarioTitle: sc.title,
+    category: sc.category,
+    taRole: String(sc.taRole || ''),       /* 快照到存档：自定义情景被删后，进行中/已完结演绎仍完整 */
+    userRole: String(sc.userRole || ''),
+    opening: sc.opening,
+    roleId: actRoleId(),
+    chatHistory: [],   /* 进入房间时聊天区全空：不再自动推入任何开场白/旁白，用户发第一句话后才有内容 */
+    startTime: Date.now(),
+    endTime: 0
+  };
+  state.acts.activeActs.push(act);
+  persist();
+  actRoomId = act.actId;
+  actRoomMode = 'active';
+  navigate({ page: 'sub', name: 'actroom' });
+}
+
+/* ---------- 演绎房间（进行中 / 只读回顾共用骨架） ---------- */
+function actMsgHTML(act, m) {
+  const name = m.sender === 'me' ? '你' : esc(taName(act.roleId));
+  return `<div class="act-msg ${m.sender === 'me' ? 'mine' : 'ta'}">
+    <div class="act-msg-name">${name}</div>
+    <div class="act-bubble">${esc(m.text)}</div>
+  </div>`;
+}
+
+function renderActRoomPage(keepFocus) {
+  const found = findAct(actRoomId);
+  if (!found) { actRoomId = ''; return renderActsPage(); }   /* 存档异常丢失：回主界面 */
+  const act = found.act;
+  const readonly = actRoomMode === 'finished' || found.done;
+  /* 右上角：【删除】（灰色小字，进行中/已完结都有）+ 进行中的【结束并保存】 */
+  const delBtnHTML = `<button class="act-room-del" id="actDelBtn" type="button">删除</button>`;
+  const endBtnHTML = (readonly ? '' : `<button class="act-end-btn" id="actEndBtn" type="button">结束并保存</button>`) + delBtnHTML;
+  const body = subShell(act.scenarioTitle, `
+    <div class="act-room">
+      <div class="act-opening">
+        <div class="act-opening-title">【剧本背景】</div>
+        ${(act.taRole || act.userRole) ? `<div class="act-roles">
+          ${act.taRole ? `<span class="act-role-tag">TA 饰 ${esc(act.taRole)}</span>` : ''}
+          ${act.userRole ? `<span class="act-role-tag">你 饰 ${esc(act.userRole)}</span>` : ''}
+        </div>` : ''}
+        <div class="act-opening-text">${esc(act.opening)}</div>
+      </div>
+      <div class="act-chat" id="actChat">${actVisibleMsgs(act).map(m => actMsgHTML(act, m)).join('')}</div>
+      ${readonly
+        ? '<div class="act-readonly">演绎已完结 · 仅供回顾，无法发送新消息</div>'
+        : `<div class="act-input-bar">
+             <input class="act-input" id="actInput" type="text" placeholder="回复 TA…" maxlength="500" autocomplete="off">
+             <button class="act-send" id="actSendBtn" type="button">发送</button>
+           </div>`}
+    </div>
+  `, endBtnHTML);
+  body.classList.add('act-room-body');   /* 关掉 sub-body 自身滚动与内边距，交给房间内部三段式布局 */
+  const chat = $('#actChat', body);
+  if (chat) chat.scrollTop = chat.scrollHeight;   /* 每次渲染都停到最新消息 */
+  const sendBtn = $('#actSendBtn', body);
+  const input = $('#actInput', body);
+  if (sendBtn) sendBtn.addEventListener('click', actSend);
+  if (input) {
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') actSend(); });
+    if (keepFocus) input.focus();                 /* 发送后重绘保持输入焦点；进入房间不主动弹键盘 */
+  }
+  /* 注意：结束/删除按钮在 .sub-nav 的 rightHTML 里（#subBody 之外），必须全局取，不能限定 body 作用域 */
+  const endBtn = $('#actEndBtn');
+  if (endBtn) endBtn.addEventListener('click', async () => {
+    if (!(await confirmDialog('结束演绎', '结束后将移入【已完结】，可以随时回顾。确定结束这段演绎吗？', '结束并保存'))) return;
+    const cur = findAct(actRoomId);
+    if (!cur || cur.done) return;
+    cur.act.endTime = Date.now();
+    state.acts.activeActs = state.acts.activeActs.filter(x => x.actId !== cur.act.actId);
+    state.acts.finishedActs.unshift(cur.act);
+    persist();
+    showToast('演绎已保存');
+    actRoomId = '';
+    actRoomMode = 'active';
+    goBack();   /* 弹栈回主界面，renderActsPage 自动以最新存档重绘 */
+  });
+  /* 房间内删除：销毁当前进度/记录并退回主界面；actSend 里未回复的延时因 findAct 为 null 自动作废 */
+  const delBtn = $('#actDelBtn');
+  if (delBtn) delBtn.addEventListener('click', async () => {
+    if (!(await confirmDialog('删除演绎', '确定要删除这个演绎进度吗？删除后不可恢复。', '删除', true))) return;
+    const cur = findAct(actRoomId);
+    if (!cur) return;
+    if (cur.done) state.acts.finishedActs = state.acts.finishedActs.filter(x => x.actId !== cur.act.actId);
+    else state.acts.activeActs = state.acts.activeActs.filter(x => x.actId !== cur.act.actId);
+    persist();
+    showToast('已删除');
+    actRoomId = '';
+    actRoomMode = 'active';
+    goBack();
+  });
+}
+
+/* ---------- 发言与 TA 回复：严格写入当前 actId 的 chatHistory，绝不混入主聊天 ---------- */
+function actSend() {
+  const found = findAct(actRoomId);
+  if (!found || found.done) return;
+  const input = $('#actInput');
+  const text = String((input && input.value) || '').trim();
+  if (!text) return;
+  const myActId = found.act.actId;
+  found.act.chatHistory.push({ id: uid(), sender: 'me', text, ts: Date.now() });
+  persist();
+  renderActRoomPage(true);
+  /* TA 回复：复用主字卡抽取逻辑；act 专属 key 防复读，与主聊天互不干扰；至少 0.6s 让对话有呼吸感 */
+  const delay = Math.max(replyDelayMs(), 600);
+  setTimeout(() => {
+    if (sleepSilent()) return;                       /* 一起睡觉期间 TA 不回复 */
+    const cur = findAct(myActId);
+    if (!cur || cur.done) return;                    /* 演绎已结束或存档删除：不再回复 */
+    const replyText = composeCardText(cur.act.roleId, { key: 'act:' + myActId }) || EMPTY_CARD_TEXT;
+    cur.act.chatHistory.push({ id: uid(), sender: 'ta', text: replyText, ts: Date.now() });
+    persist();
+    /* 只有还停在这个房间时才重绘，避免打扰其它页面 */
+    if (currentRoute.page === 'sub' && currentRoute.name === 'actroom' && actRoomId === myActId) renderActRoomPage(true);
+  }, delay);
+}
+
+/* ---------- 新建自定义剧本弹窗 ---------- */
+function openActScenarioModal() {
+  /* 分类下拉 = 内置分类 + 用户自定义分类，实时生成 */
+  const catOpts = actAllCats().map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  showModal({
+    title: '新建剧本',
+    body: `
+      <div class="field"><label>剧本名（必填）</label><input class="input" id="acsTitle" maxlength="30" placeholder="例如：雨后天台"></div>
+      <div class="field"><label>选择分类</label><select class="select" id="acsCategory">${catOpts}</select></div>
+      <div class="field"><label>TA 的身份设定</label><input class="input" id="acsTaRole" maxlength="60" placeholder="例如：冷酷的吸血鬼亲王"></div>
+      <div class="field"><label>你的身份设定</label><input class="input" id="acsUserRole" maxlength="60" placeholder="例如：误入古堡的人类少女"></div>
+      <div class="field"><label>剧本背景 / 开场介绍（必填）</label><textarea class="textarea" id="acsOpening" rows="4" maxlength="500" placeholder="这段文字只展示在房间顶部的介绍卡片中，不会进入聊天记录…"></textarea></div>
+    `,
+    actions: [
+      { label: '取消' },
+      { label: '保存', kind: 'primary', onClick: overlay => {
+        const title = String($('#acsTitle', overlay).value || '').trim();
+        const opening = String($('#acsOpening', overlay).value || '').trim();
+        if (!title) { showToast('请填写剧本名'); return false; }   /* return false：校验不过不关弹窗 */
+        if (!opening) { showToast('请填写剧本背景 / 开场介绍'); return false; }
+        const cat = actNormCat($('#acsCategory', overlay).value);
+        state.acts.customScenarios.push({
+          id: 'cus-' + uid(),
+          category: cat,
+          title: title.slice(0, 30),
+          taRole: String($('#acsTaRole', overlay).value || '').trim().slice(0, 60),
+          userRole: String($('#acsUserRole', overlay).value || '').trim().slice(0, 60),
+          opening,
+          ts: Date.now()
+        });
+        persist();
+        showToast('剧本已保存');
+        actTab = cat;   /* 保存后跳到该剧本所在分类，用户能立刻看到它 */
+        renderActsPage();   /* 弹窗挂在 #modalRoot，页面重绘不影响它 */
+      } }
+    ]
+  });
+}
+
+/* ---------- 新建分类：Tab 栏尾部【+】触发；保存后立即渲染出新 Tab 并切换过去 ---------- */
+function openActAddCategoryModal() {
+  showModal({
+    title: '新建分类',
+    body: `<div class="field"><label>分类名称（最多 8 字）</label><input class="input" id="actNewCatName" maxlength="8" placeholder="例如：民国风云"></div>`,
+    actions: [
+      { label: '取消' },
+      { label: '保存', kind: 'primary', onClick: overlay => {
+        const name = String($('#actNewCatName', overlay).value || '').trim().slice(0, 8);
+        if (!name) { showToast('请输入分类名称'); return false; }   /* return false：校验不过不关弹窗 */
+        if (actAllCats().includes(name)) { showToast('分类已存在'); return false; }
+        /* 与已删内置分类同名：视为"复活"该内置分类（老剧本随之重新显示），不再重复建用户分类 */
+        state.acts.deletedCategories = state.acts.deletedCategories.filter(c => c !== name);
+        if (!ACT_CATEGORIES.includes(name)) state.acts.userCategories.push(name);
+        persist();
+        showToast('分类已添加');
+        actTab = name;        /* 立刻切到新分类，用户马上在 Tab 栏看到它 */
+        renderActsPage();     /* 弹窗挂在 #modalRoot，页面重绘不影响它 */
+      } }
+    ]
+  });
+}
+
+/* ---------- 删除分类（长按 Tab 触发，内置/自定义都可删）----------
+ * 内置：分类名记入 deletedCategories（持久化，刷新后依然不显示）；
+ * 自定义：直接从 userCategories 移除。
+ * 该分类下的剧本一律不删不改：没有对应 Tab 自然隐藏；日后新建同名分类会自动重新显示。 */
+async function actDeleteCategory(name) {
+  if (!(await confirmDialog('删除分类', `确定要删除分类【${name}】吗？`, '删除', true))) return;
+  if (ACT_CATEGORIES.includes(name)) {
+    if (!state.acts.deletedCategories.includes(name)) state.acts.deletedCategories.push(name);
+  } else {
+    state.acts.userCategories = state.acts.userCategories.filter(c => c !== name);
+  }
+  if (actTab === name) actTab = actAllCats()[0] || '';
+  persist();
+  showToast('分类已删除');
+  renderActsPage();
 }
 
 /* =========================================================
