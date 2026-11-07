@@ -1250,23 +1250,70 @@ input[type=range]::-webkit-slider-thumb{
 .snap-preview{
   position:fixed;inset:0;z-index:10003;background:rgba(0,0,0,.86);
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
-  padding:24px 16px calc(24px + var(--safe-bottom));cursor:default;
+  /* 底部留出保存按钮的高度，避免长图被按钮压住 */
+  padding:24px 16px calc(104px + var(--safe-bottom));cursor:default;
+  /* 遮罩必须能接收触摸事件，绝不能是 pointer-events:none，否则里面的图片长按无反应 */
+  pointer-events:auto;
 }
-.snap-preview .sp-img{
+
+/* ===== 长按保存的关键样式（iOS 必须同时满足三条） =====
+   1. -webkit-touch-callout:default → 允许弹出「存储图像」系统菜单
+   2. -webkit-user-select:auto      → 允许长按选中图片（部分 iOS 版本缺它就不弹菜单）
+   3. pointer-events:auto           → 图片必须真正接到触摸事件
+   全部用 !important 压掉页面上其它“禁长按”的全局规则（录音浮层 / 桌宠 / 拖动把手等）。 */
+.preview-image{
+  -webkit-touch-callout:default !important;
+  -webkit-user-select:auto !important;
+  user-select:auto !important;
+  pointer-events:auto !important;
+  z-index:100000 !important;
+}
+.snap-preview .sp-img,
+.snap-preview .preview-image{
   max-width:92vw;max-height:72vh;border-radius:14px;object-fit:contain;
   box-shadow:0 12px 40px rgba(0,0,0,.5);
-  pointer-events:auto;-webkit-touch-callout:default;touch-callout:default;
-  -webkit-user-select:auto;user-select:auto;cursor:default;
+  -webkit-touch-callout:default !important;      /* 必须 default 才能长按保存 */
+  touch-callout:default !important;
+  -webkit-user-select:auto !important;
+  user-select:auto !important;
+  pointer-events:auto !important;
+  touch-action:auto;                             /* 保留原生长按手势，不阻断 */
+  -webkit-tap-highlight-color:transparent;
+  cursor:default;
+  position:relative;
+  z-index:100000;                                /* 确保在预览层内部最顶层 */
 }
+
+/* 底部操作区：固定的保存按钮 + 长按提示（任何浏览器都存得下来） */
+.snap-preview .sp-bar{
+  position:fixed;left:0;right:0;bottom:0;z-index:100001;
+  width:100%;max-width:480px;margin:0 auto;
+  padding:14px 16px calc(14px + env(safe-area-inset-bottom, 0px));
+  display:flex;flex-direction:column;align-items:center;gap:8px;
+  background:linear-gradient(to top,rgba(0,0,0,.78),rgba(0,0,0,0));
+  pointer-events:none;                           /* 空白区不挡图片手势 */
+}
+.snap-preview .sp-save{
+  pointer-events:auto;
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  min-width:186px;height:44px;padding:0 22px;
+  border-radius:22px;background:var(--primary);color:#fff;
+  font-size:15px;font-weight:600;letter-spacing:.4px;
+  box-shadow:0 8px 22px rgba(18,183,245,.4);
+}
+.snap-preview .sp-save:active{transform:scale(.97);opacity:.9;}
+.snap-preview .sp-save svg{width:18px;height:18px;flex-shrink:0;}
 /* 超长留影图（几十上百条）：图片按原比例完整展开，容器可纵向滑动，
    不再压缩进 72vh 导致内容看不清；短图仍走上面的居中等比例显示 */
 .snap-preview.tall{justify-content:flex-start;overflow-y:auto;}
 .snap-preview.tall .sp-img{max-height:none;width:92vw;max-width:92vw;height:auto;}
 .snap-preview .sp-tip{color:#fff;font-size:13px;line-height:1.6;text-align:center;opacity:.92;pointer-events:none;}
 .snap-preview .sp-close{
-  position:absolute;top:calc(12px + env(safe-area-inset-top, 0px));right:12px;
+  /* 图片被提到 z-index:100000，关闭按钮必须更高，长图滚到顶部时也不会被图盖住点不到；
+     fixed 定位保证长图滚动时按钮始终悬在右上角 */
+  position:fixed;top:calc(12px + env(safe-area-inset-top, 0px));right:12px;
   width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.18);color:#fff;
-  font-size:16px;display:grid;place-items:center;z-index:2;
+  font-size:16px;display:grid;place-items:center;z-index:100002;
 }
 
 /* ===================== iMessage 主题覆盖 ===================== */

@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.7.3';
+const APP_VERSION = 'v8.7.4';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -4291,6 +4291,8 @@ document.addEventListener('pointercancel', () => { endVoicePress(true); });
 let voiceNativeBlocked = false;
 
 function voiceBlockNativeHandler(e) {
+  /* 留影全屏预览的大图豁免：否则录音期残留的拦截器会让长按弹不出「存储图像」 */
+  if (isPreviewImage(e.target)) return;
   /* 捕获阶段直接吞掉，阻止 default 与后续冒泡逻辑 */
   if (e.cancelable) e.preventDefault();
   e.stopPropagation();
@@ -6329,8 +6331,12 @@ function renderHomePage() {
     let lpTimer = null;
     let fired = false;
     const cancel = () => { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } };
-    /* 彻底屏蔽浏览器长按弹出的系统菜单（复制/存储图片等） */
-    el.addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); });
+    /* 彻底屏蔽浏览器长按弹出的系统菜单（复制/存储图片等）；
+       但留影全屏预览的大图必须豁免，否则长按存不下图 */
+    el.addEventListener('contextmenu', e => {
+      if (isPreviewImage(e.target)) return;
+      e.preventDefault(); e.stopPropagation();
+    });
     el.addEventListener('pointerdown', e => {
       if (typeof e.button === 'number' && e.button > 0) return;
       fired = false;
@@ -8363,16 +8369,60 @@ const CS_TEMPLATES = {
 const CS_FONT_SELECTOR = '*, *::before, *::after, input, textarea, button, select';
 
 let csTab = 'font';                        /* 当前分类：font / bubble */
-const csDraft = { font: '', bubble: '' };  /* 输入框草稿（内存态，切换分类不丢） */
+
+/* ================= 字体 / 气泡草稿：两套内容彻底独立，绝不互相串台 =================
+ * 旧版把两套代码塞进同一个 csDraft 对象、并在多处按“当前 Tab”写回，
+ * 页面重渲染或 Tab 切换时序异常时就会把另一套内容带进输入框。
+ * 现在改为两个完全独立的变量 + 两个独立的 localStorage 键，读写永远只认分类。 */
+let currentFontCSS = '';
+let currentBubbleCSS = '';
+const CS_LS_KEY_FONT = 'savedFontCSS';
+const CS_LS_KEY_BUBBLE = 'savedBubbleCSS';
+
+/* 按分类取草稿：font → currentFontCSS，bubble → currentBubbleCSS，绝无交叉 */
+function csGetDraft(mode) {
+  return mode === 'bubble' ? currentBubbleCSS : currentFontCSS;
+}
+
+/* 按分类写草稿：内存 + localStorage 同步落盘（超大 Base64 超出配额时静默忽略） */
+function csSetDraft(mode, value) {
+  const v = String(value == null ? '' : value);
+  if (mode === 'bubble') currentBubbleCSS = v;
+  else currentFontCSS = v;
+  try {
+    localStorage.setItem(mode === 'bubble' ? CS_LS_KEY_BUBBLE : CS_LS_KEY_FONT, v);
+  } catch (e) { /* 配额不足：IndexedDB 里的已应用样式不受影响 */ }
+  return v;
+}
+
+/* 每次进入页面：从本地存储恢复两套草稿。
+   仅在内存为空时才回填，避免超大字体写库失败后反过来把正在编辑的内容清掉 */
+function csLoadDrafts() {
+  const applied = (state.beautify.customStyle.applied || {});
+  if (!currentFontCSS) {
+    let v = '';
+    try { v = localStorage.getItem(CS_LS_KEY_FONT) || ''; } catch (e) { /* 忽略 */ }
+    currentFontCSS = v || applied.font || '';
+  }
+  if (!currentBubbleCSS) {
+    let v = '';
+    try { v = localStorage.getItem(CS_LS_KEY_BUBBLE) || ''; } catch (e) { /* 忽略 */ }
+    currentBubbleCSS = v || applied.bubble || '';
+  }
+}
+
 let csLastFontData = '';                   /* 本次上传的字体 dataURL，随预设一起保存 */
 let csPreviewTimer = null;
 
-/* 注入器：放在 head 末尾，天然晚于 style.css，同优先级规则即可覆盖内置样式 */
-function csInjector() {
-  let el = document.getElementById('custom-style-injector');
+/* 注入器：放在 head 末尾，天然晚于 style.css，同优先级规则即可覆盖内置样式。
+ * 字体与气泡各用一个独立的 <style>（kind = 'font' / 'bubble'），
+ * 互不覆盖、互不拼接，任何一套代码出问题都不会牵连另一套。 */
+function csInjector(kind) {
+  const id = 'custom-style-injector' + (kind ? '-' + kind : '');
+  let el = document.getElementById(id);
   if (!el) {
     el = document.createElement('style');
-    el.id = 'custom-style-injector';
+    el.id = id;
     document.head.appendChild(el);
   } else if (el !== document.head.lastElementChild) {
     /* 始终排在 head 最后一个 style 之后：同权重时后出现的规则才能覆盖 style.css 里的内置样式 */
@@ -8402,10 +8452,12 @@ function applyCustomStyleInline(b) {
   const font = applied.font ? csEnsureGlobalFont(applied.font) : '';
   /* 气泡：仍锁进 #page-chat，避免用户写 div / .bubble 这类宽泛选择器误伤 Toast、来电弹窗 */
   const bubble = applied.bubble ? csScopeToChat(applied.bubble) : '';
-  /* 先清空再写入：每次应用都是全量替换，绝不会与上一次的规则叠加冲突 */
-  const el = csInjector();
-  el.textContent = '';
-  el.textContent = [font, bubble].filter(Boolean).join('\n\n');
+  /* 先清空再写入：每次应用都是全量替换，绝不会与上一次的规则叠加冲突。
+     字体、气泡各写进独立的 <style>，互不干扰（两套都有内容时同时生效） */
+  const fontEl = csInjector('font');
+  const bubbleEl = csInjector('bubble');
+  fontEl.textContent = font || '';
+  bubbleEl.textContent = bubble || '';
   /* 自定义气泡常把背景改成浅色：立刻按页面上第一张卡片的真实背景重算文字色，
      避免转账 / 送礼 / 定位 / 心情卡仍是白字看不清（无卡片时保持现有值） */
   try { syncCardTextColorFromDom(); } catch (e) { /* 忽略，不影响注入 */ }
@@ -8895,13 +8947,13 @@ const CS_BIG_CSS_LEN = 1024 * 1024;
  * 超大字体草稿走 setTimeout 异步注入，避免几十 MB 的 style 写入阻塞主线程造成假死；
  * 异步分支在执行时重新读取草稿，清空操作不会被旧内容覆盖 */
 function csPreviewCombined() {
-  const fontCss = csBuildCSS(csDraft.font || '', 'font');
-  const bubbleCss = csBuildCSS(csDraft.bubble || '', 'bubble');
+  const fontCss = csBuildCSS(csGetDraft('font'), 'font');
+  const bubbleCss = csBuildCSS(csGetDraft('bubble'), 'bubble');
   const css = [fontCss, bubbleCss].filter(Boolean).join('\n\n');
   csPreviewStyle().textContent = css ? csScopeCSS(css, '.cs-preview') : '';
 }
 function csUpdatePreview() {
-  const total = (csDraft.font || '').length + (csDraft.bubble || '').length;
+  const total = csGetDraft('font').length + csGetDraft('bubble').length;
   if (total > CS_BIG_CSS_LEN) {
     setTimeout(() => {
       try { csPreviewCombined(); } catch (e) { /* 超大文本注入失败不影响页面其它功能 */ }
@@ -8954,7 +9006,7 @@ async function csCopyTemplate() {
 
 /* 一键清空：只清空当前分类的编辑草稿与预览，不影响已应用的全局样式和已保存的预设 */
 function csClearDraft() {
-  csDraft[csTab] = '';
+  csSetDraft(csTab, '');
   const input = $('#csInput');
   if (input) input.value = '';
   if (csPreviewTimer) { clearTimeout(csPreviewTimer); csPreviewTimer = null; }
@@ -8967,6 +9019,10 @@ function csClearDraft() {
 
 function csSwitchTab(mode) {
   if (!mode || mode === csTab) return;
+  /* 离开前先把当前输入框的实时内容写回它自己的变量（双保险：
+     即便 input 事件因输入法组合态未触发，也不会把内容丢给另一个分类） */
+  const prevInput = $('#csInput');
+  if (prevInput) csSetDraft(csTab, prevInput.value);
   csTab = mode;
   state.beautify.customStyle.tab = mode;
   csSetStatus('', '');   /* 换分类后旧的校验结果不再适用 */
@@ -8974,13 +9030,19 @@ function csSwitchTab(mode) {
   const up = $('#csUploadFont');
   if (up) up.classList.toggle('hidden', mode !== 'font');
   const input = $('#csInput');
-  if (input) input.value = csDraft[mode] || '';
+  /* 关键：切 Tab 瞬间把输入框换成该分类自己的草稿，绝不复用另一个分类的内容 */
+  if (input) {
+    input.value = csGetDraft(mode);
+    input.scrollTop = 0;
+    input.scrollLeft = 0;
+  }
   csUpdatePreview();
 }
 
 /* 应用到全局：空输入视为清除该分类的自定义样式 */
 function csApplyCurrent() {
-  const css = csBuildCSS(csDraft[csTab], csTab);
+  /* 只读取“当前分类”自己的草稿，另一个分类的代码绝不会被顺手带进来 */
+  const css = csBuildCSS(csGetDraft(csTab), csTab);
   const cs = state.beautify.customStyle;
   cs.applied[csTab] = css;
   cs.tab = csTab;
@@ -8988,7 +9050,7 @@ function csApplyCurrent() {
   customStyleMirror();
   csApplyInlineDeferred();   /* 超大字体异步注入，防止阻塞主线程 */
   /* 方便排查：控制台能直接看到真正注入到 head 的最终 CSS */
-  console.info('[样式自定义] 已注入 #custom-style-injector，长度 ' + css.length + '\n' + css);
+  console.info('[样式自定义] 已注入 #custom-style-injector-font，长度 ' + css.length + '\n' + css);
   showToast(css ? '已应用到全局' : '已清除该分类的自定义样式');
 }
 
@@ -9004,7 +9066,7 @@ function csSetStatus(kind, text) {
    带大括号的完整 CSS 永远原样注入，纯属性自动包裹该分类的精准选择器 */
 async function csApplyGuarded() {
   csSetStatus('', '');
-  const raw = String(csDraft[csTab] || '').trim();
+  const raw = String(csGetDraft(csTab) || '').trim();
   if (!raw) {
     csSetStatus('error', '❌ 请输入代码');
     showToast('请输入代码');
@@ -9044,7 +9106,7 @@ async function csApplyGuarded() {
   persist();
   customStyleMirror();
   csApplyInlineDeferred();   /* 超大字体异步注入，防止阻塞主线程 */
-  console.info('[样式自定义] 已注入 #custom-style-injector，长度 ' + css.length + '\n' + css);
+  console.info('[样式自定义] 已注入 #custom-style-injector-' + csTab + '，长度 ' + css.length + '\n' + css);
 
   /* 4) 类名校验：命中需求指定的三个类名，或项目真实在用的 .bubble / .chat-text，即算作用到气泡上 */
   if (/(?:^|[^\w.-])\.\s*(message-sent|message-received|message-bubble|bubble|chat-text)\b/.test(css)) {
@@ -9060,7 +9122,7 @@ async function csSavePreset() {
   const name = await promptDialog('保存为预设', '给这套样式起个名字', csTab === 'font' ? '字体预设' : '气泡预设');
   if (name === null) return;
   if (!name) { showToast('预设名称不能为空'); return; }
-  const raw = csDraft[csTab] || '';
+  const raw = csGetDraft(csTab) || '';
   const css = csBuildCSS(raw, csTab);
   if (!css) { showToast('请先粘贴或上传内容'); return; }
   const cs = state.beautify.customStyle;
@@ -9085,9 +9147,10 @@ function csLoadPreset(id) {
   const p = state.beautify.customStyle.presets.find(x => x.id === id);
   if (!p) return;
   if (p.mode !== csTab) csSwitchTab(p.mode);
-  csDraft[p.mode] = p.code || '';
+  /* 只写入该预设自身所属的分类，另一个分类的输入内容原样保留、互不影响 */
+  csSetDraft(p.mode, p.code || '');
   const input = $('#csInput');
-  if (input) input.value = csDraft[p.mode];
+  if (input) input.value = csGetDraft(p.mode);
   csUpdatePreview();
   showToast('已载入预设：' + p.name);
 }
@@ -9143,10 +9206,10 @@ function csReadFontFile(file) {
         if (!data || data.indexOf('data:') !== 0) throw new Error('bad font data');
         csLastFontData = data;
         if (csTab !== 'font') csSwitchTab('font');
-        csDraft.font = csFontFace(data, csFontFormat(file.name), 'CustomFont') + '\n' +
-          `${CS_FONT_SELECTOR} { font-family: 'CustomFont', -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif !important; }`;
+        csSetDraft('font', csFontFace(data, csFontFormat(file.name), 'CustomFont') + '\n' +
+          `${CS_FONT_SELECTOR} { font-family: 'CustomFont', -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif !important; }`);
         const input = $('#csInput');
-        if (input) input.value = csDraft.font;
+        if (input) input.value = csGetDraft('font');
         csUpdatePreview();   /* 内部对超大文本已做异步注入 */
         showToast('字体已载入，点【应用到全局】生效');
       } catch (e) {
@@ -9170,9 +9233,8 @@ function csReadFontFile(file) {
 function customStylePanelHTML() {
   const cs = state.beautify.customStyle;
   csTab = cs.tab === 'bubble' ? 'bubble' : 'font';
-  /* 首次进入回填已应用的代码；之后保留用户正在编辑的草稿 */
-  if (!csDraft.font) csDraft.font = cs.applied.font || '';
-  if (!csDraft.bubble) csDraft.bubble = cs.applied.bubble || '';
+  /* 每次进入页面：从本地存储恢复字体 / 气泡两套互相独立的草稿 */
+  csLoadDrafts();
   const presets = cs.presets || [];
   return `
     <div class="panel" id="customStylePanel">
@@ -9189,7 +9251,7 @@ function customStylePanelHTML() {
         <button class="btn ghost cs-clear" id="csClear" title="清空输入框">清空</button>
       </div>
       <!-- 代码输入区 -->
-      <textarea class="cs-input" id="csInput" spellcheck="false" placeholder="请粘贴 CSS 代码、在线字体链接或 CSS 文件链接">${esc(csDraft[csTab] || '')}</textarea>
+      <textarea class="cs-input" id="csInput" spellcheck="false" placeholder="请粘贴 CSS 代码、在线字体链接或 CSS 文件链接">${esc(csGetDraft(csTab))}</textarea>
       <div class="muted" style="font-size:12px;margin:6px 0 0;line-height:1.6">字体样式全站生效（普通文字、输入框、按钮统一，自定义 TTF 会自动生成 @font-face 并拼接注入）；气泡样式自动锁定 #page-chat 作用域，绝不会污染 Toast、来电弹窗等系统界面。纯属性（如 background: pink;）会自动包裹气泡/文字选择器并强制加 !important；含花括号的代码原样注入。贴字体直链（.ttf / .woff / .woff2）自动生成 @font-face，贴 .css 链接自动生成 @import。若应用成功但界面没变化，请检查类名是否命中 .msg.mine / .msg.theirs > .msg-body > .bubble（可在控制台检查）。</div>
       <!-- 统一预览区：DOM 与真实聊天页完全一致（.msg.theirs / .msg.mine > .msg-body > .bubble），
            字体与气泡代码合并注入，预览里生效的代码在真实聊天页必然也生效 -->
@@ -9246,7 +9308,8 @@ function bindCustomStyleEvents() {
 
   const input = $('#csInput');
   if (input) input.addEventListener('input', () => {
-    csDraft[csTab] = input.value;
+    /* 按当前 Tab 写入对应变量 + 对应的 localStorage 键，两套内容永不交叉 */
+    csSetDraft(csTab, input.value);
     if (csPreviewTimer) clearTimeout(csPreviewTimer);
     csPreviewTimer = setTimeout(csUpdatePreview, 300);   /* 防抖：边输入边预览 */
   });
@@ -10496,14 +10559,92 @@ function snapshotToDataURL(rec) {
 
 /* 留影图片全屏预览（Lightbox）：不直接触发下载，用户长按图片调起系统「存储图像」菜单。
  * 关键：图片节点不能带 pointer-events:none / -webkit-touch-callout:none，否则长按无反应。 */
+
+/* 全局 contextmenu 拦截器的豁免判定：预览大图必须放行，否则长按弹不出「存储图像」 */
+function isPreviewImage(el) {
+  return !!(el && el.closest && el.closest('.snap-preview .preview-image, .snap-preview .sp-img'));
+}
+
+/* dataURL → Blob：直接给 a[download] 用，比 dataURL 更稳（部分安卓浏览器会拦 data: 下载） */
+function dataUrlToBlob(dataUrl) {
+  try {
+    const s = String(dataUrl || '');
+    const comma = s.indexOf(',');
+    if (comma < 0) return null;
+    const mime = (/^data:([^;,]+)/.exec(s.slice(0, comma)) || [])[1] || 'image/png';
+    const bin = atob(s.slice(comma + 1));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  } catch (e) { return null; }
+}
+
+/* 保存留影图片：a[download] → 系统分享 → canvas 重绘，三道兜底确保任何浏览器都存得下 */
+function saveSnapshotImage(dataUrl) {
+  const fileName = '留影_' + new Date().toISOString().slice(0, 10) + '_' + Date.now() + '.png';
+  const blob = dataUrlToBlob(dataUrl);
+  if (blob) {
+    /* iOS Safari 不支持 a[download]，但系统分享面板里有「存储图像」，可直接进相册 */
+    try {
+      const file = new File([blob], fileName, { type: blob.type || 'image/png' });
+      if (navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], title: '留影' }).catch(() => {});
+        return;
+      }
+    } catch (e) { /* 不支持就继续走下载 */ }
+    /* 安卓 / 桌面：blob + a[download] 直接落地到下载目录 */
+    try {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fileName; a.rel = 'noopener';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 3000);
+      showToast('已保存留影图片');
+      return;
+    } catch (e) { console.warn('[snapshot] a[download] 失败，改用 canvas 兜底：', e); }
+  }
+  /* 终极兜底：canvas 重绘后重新导出（微信/国产浏览器内核对 Blob 下载支持差时最有效） */
+  const img = new Image();
+  img.onload = () => {
+    try {
+      const cv = document.createElement('canvas');
+      cv.width = img.naturalWidth || img.width;
+      cv.height = img.naturalHeight || img.height;
+      cv.getContext('2d').drawImage(img, 0, 0);
+      const out = cv.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = out; a.download = fileName;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      showToast('已保存留影图片');
+    } catch (e) {
+      /* 连 canvas 都受限：新窗口打开原图，让用户手动长按保存 */
+      try { window.open(dataUrl, '_blank'); } catch (e2) { showToast('保存失败，请长按图片保存'); }
+    }
+  };
+  img.onerror = () => showToast('保存失败，请长按图片保存');
+  img.src = dataUrl;
+}
+
 function openSnapshotPreview(dataUrl) {
   if (!dataUrl) return;
   const box = document.createElement('div');
   box.className = 'snap-preview';
   box.innerHTML = `
     <button class="sp-close" aria-label="关闭">✕</button>
-    <img class="sp-img" src="${dataUrl}" alt="留影">
-    <div class="sp-tip">长按图片即可保存到手机相册</div>`;
+    <img class="sp-img preview-image" src="${dataUrl}" alt="留影">
+    <div class="sp-bar">
+      <button class="sp-save" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+        保存图片到本地
+      </button>
+      <div class="sp-tip">长按图片也可保存到手机相册</div>
+    </div>`;
   document.body.appendChild(box);
   /* 长图预览自适应：高宽比超过 2.5 的留影图（条数多）改成可纵向滚动、按原比例展开，
      避免被 72vh 压成一条细线看不清内容；普通短图保持居中显示 */
@@ -10514,11 +10655,24 @@ function openSnapshotPreview(dataUrl) {
   if (spImg) {
     if (spImg.complete) markTall();
     spImg.addEventListener('load', markTall);
+    /* 图片自身的所有指针事件只 stopPropagation、绝不 preventDefault：
+       既不会冒泡到遮罩层触发“点空白关闭”，也完整保留浏览器的原生长按菜单。 */
+    ['click', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'contextmenu'].forEach(type => {
+      spImg.addEventListener(type, e => { e.stopPropagation(); });
+    });
+    ['touchstart', 'touchend', 'touchmove'].forEach(type => {
+      spImg.addEventListener(type, e => { e.stopPropagation(); }, { passive: true });
+    });
   }
   const close = () => { box.remove(); document.removeEventListener('keydown', onKey); };
   const onKey = e => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onKey);
   box.querySelector('.sp-close').addEventListener('click', e => { e.stopPropagation(); close(); });
+  /* 保存按钮：不依赖长按，安卓/微信内也能一键存图 */
+  box.querySelector('.sp-save').addEventListener('click', e => {
+    e.stopPropagation();
+    saveSnapshotImage(dataUrl);
+  });
   /* 只有点击图片外的黑色空白区才关闭，点图片本身留给长按保存 */
   box.addEventListener('click', e => { if (e.target === box) close(); });
 }
