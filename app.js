@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v9.0.2';
+const APP_VERSION = 'v9.0.3';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -18077,30 +18077,31 @@ const HOME_DEFAULT_CLOTHES = [
   { id: 'cl-a3', cat: 'accessory', name: '格纹围巾', emoji: '🧣' }
 ];
 
-/* 内置食材库：名称 / Emoji / 保质期（天）/ TA 买回来时附带的专属台词 */
+/* 内置食材库：名称 / Emoji / 保质期（天）/ TA 的专属台词 / 是否可以直接吃
+ * ready=true 为即食类（牛奶、蛋糕、啤酒等）；false 为烹饪食材，需去灶台加工 */
 const HOME_INGREDIENTS = [
-  { name: '番茄', emoji: '🍅', days: 7, dialogue: '洗两个，我给你做番茄炒蛋。' },
-  { name: '鸡蛋', emoji: '🥚', days: 20, dialogue: '给你补充营养的。' },
-  { name: '土豆', emoji: '🥔', days: 20, dialogue: '炖牛肉缺它不行，等我。' },
-  { name: '牛肉', emoji: '🥩', days: 5, dialogue: '今晚吃好一点。' },
-  { name: '青菜', emoji: '🥬', days: 5, dialogue: '别老吃肉，也要吃点青菜。' },
-  { name: '胡萝卜', emoji: '🥕', days: 14, dialogue: '对眼睛好，别挑出来。' },
-  { name: '面条', emoji: '🍜', days: 30, dialogue: '半夜饿了就煮这个。' },
-  { name: '米饭', emoji: '🍚', days: 3, dialogue: '剩的可以炒饭，别浪费。' },
-  { name: '牛奶', emoji: '🥛', days: 7, dialogue: '早上记得热一下喝，别空腹。' },
-  { name: '蘑菇', emoji: '🍄', days: 5, dialogue: '煮汤很鲜，留给你。' },
-  { name: '豆腐', emoji: '🧊', days: 3, dialogue: '配蘑菇煮汤，暖暖胃。' },
-  { name: '虾', emoji: '🦐', days: 3, dialogue: '剥好了再吃，别扎到手。' },
-  { name: '葱', emoji: '🌿', days: 7, dialogue: '撒一点更香。' },
-  { name: '芝士', emoji: '🧀', days: 20, dialogue: '焗虾用的，别偷吃。' },
-  { name: '鸡肉', emoji: '🍗', days: 3, dialogue: '腌一晚上更好吃。' },
-  { name: '玉米', emoji: '🌽', days: 7, dialogue: '甜甜的，你肯定喜欢。' },
-  { name: '草莓', emoji: '🍓', days: 3, dialogue: '记得洗了再吃，特意挑的甜的。' },
-  { name: '冰啤酒', emoji: '🍺', days: 90, dialogue: '别偷喝我的，你只能喝一口。' },
-  { name: '小蛋糕', emoji: '🍰', days: 3, dialogue: '昨天路过买的，馋了就吃。' },
-  { name: '果汁', emoji: '🧃', days: 10, dialogue: '冰一会儿更好喝。' },
-  { name: '巧克力', emoji: '🍫', days: 120, dialogue: '心情不好就吃一块。' },
-  { name: '奶茶', emoji: '🧋', days: 1, dialogue: '给你买的，少糖。' }
+  { name: '番茄', emoji: '🍅', days: 7, ready: false, dialogue: '洗两个，我给你做番茄炒蛋。' },
+  { name: '鸡蛋', emoji: '🥚', days: 20, ready: false, dialogue: '给你补充营养的。' },
+  { name: '土豆', emoji: '🥔', days: 20, ready: false, dialogue: '炖牛肉缺它不行，等我。' },
+  { name: '牛肉', emoji: '🥩', days: 5, ready: false, dialogue: '今晚吃好一点。' },
+  { name: '青菜', emoji: '🥬', days: 5, ready: false, dialogue: '别老吃肉，也要吃点青菜。' },
+  { name: '胡萝卜', emoji: '🥕', days: 14, ready: false, dialogue: '对眼睛好，别挑出来。' },
+  { name: '面条', emoji: '🍜', days: 30, ready: false, dialogue: '半夜饿了就煮这个。' },
+  { name: '米饭', emoji: '🍚', days: 3, ready: false, dialogue: '剩的可以炒饭，别浪费。' },
+  { name: '牛奶', emoji: '🥛', days: 7, ready: true, dialogue: '早上记得热一下喝，别空腹。' },
+  { name: '蘑菇', emoji: '🍄', days: 5, ready: false, dialogue: '煮汤很鲜，留给你。' },
+  { name: '豆腐', emoji: '🧊', days: 3, ready: false, dialogue: '配蘑菇煮汤，暖暖胃。' },
+  { name: '虾', emoji: '🦐', days: 3, ready: false, dialogue: '剥好了再吃，别扎到手。' },
+  { name: '葱', emoji: '🌿', days: 7, ready: false, dialogue: '撒一点更香。' },
+  { name: '芝士', emoji: '🧀', days: 20, ready: false, dialogue: '焗虾用的，别偷吃。' },
+  { name: '鸡肉', emoji: '🍗', days: 3, ready: false, dialogue: '腌一晚上更好吃。' },
+  { name: '玉米', emoji: '🌽', days: 7, ready: false, dialogue: '甜甜的，你肯定喜欢。' },
+  { name: '草莓', emoji: '🍓', days: 3, ready: true, dialogue: '记得洗了再吃，特意挑的甜的。' },
+  { name: '冰啤酒', emoji: '🍺', days: 90, ready: true, dialogue: '别偷喝我的，你只能喝一口。' },
+  { name: '小蛋糕', emoji: '🍰', days: 3, ready: true, dialogue: '昨天路过买的，馋了就吃。' },
+  { name: '果汁', emoji: '🧃', days: 10, ready: true, dialogue: '冰一会儿更好喝。' },
+  { name: '巧克力', emoji: '🍫', days: 120, ready: true, dialogue: '心情不好就吃一块。' },
+  { name: '奶茶', emoji: '🧋', days: 1, ready: true, dialogue: '给你买的，少糖。' }
 ];
 
 /* 内置食谱：统一结构 = 菜名 / 菜品 Emoji / 食材数组（名称 + Emoji）/ 烹饪时间（分钟） */
@@ -18240,6 +18241,10 @@ function normalizeHome(src) {
       boughtAt,
       expireAt: Number(f.expireAt) || (boughtAt + 7 * 86400000),
       addedBy: f.addedBy === 'ta' ? 'ta' : 'user',
+      /* 旧存档没有该字段：按食材库补判定，库外自定义食材视为需要烹饪 */
+      isReadyToEat: typeof f.isReadyToEat === 'boolean'
+        ? f.isReadyToEat
+        : homeIngredientReady(name),
       /* 台词持久化：旧存档里 TA 买的食材没有台词时，按食材库补回来 */
       dialogue: f.addedBy === 'ta'
         ? String(f.dialogue || homeIngredientDialogue(name) || '').slice(0, 60)
@@ -18425,7 +18430,13 @@ function homeIngredientDialogue(name) {
   const hit = HOME_INGREDIENTS.find(i => i.name === name);
   return hit ? (hit.dialogue || '') : '';
 }
-function homeAddFridgeItem(name, emoji, days, addedBy, ts, dialogue) {
+/* 是否可以直接吃：优先用显式传入，否则按食材库判定，自定义食材默认需要烹饪 */
+function homeIngredientReady(name, ready) {
+  if (typeof ready === 'boolean') return ready;
+  const hit = HOME_INGREDIENTS.find(i => i.name === name);
+  return hit ? hit.ready === true : false;
+}
+function homeAddFridgeItem(name, emoji, days, addedBy, ts, dialogue, ready) {
   const now = Number(ts) || Date.now();
   const d = Math.max(1, Number(days) || 7);
   const by = addedBy === 'ta' ? 'ta' : 'user';
@@ -18436,6 +18447,7 @@ function homeAddFridgeItem(name, emoji, days, addedBy, ts, dialogue) {
     boughtAt: now,
     expireAt: now + d * 86400000,
     addedBy: by,
+    isReadyToEat: homeIngredientReady(name, ready),
     /* 只有 TA 买的才带留言；没显式传入时自动按食材库补齐 */
     dialogue: by === 'ta' ? String(dialogue || homeIngredientDialogue(name) || '').slice(0, 60) : ''
   });
@@ -19095,6 +19107,30 @@ function homeShowFridgeBubble(card, text, mine) {
   fridgeBubbleTimer = setTimeout(homeCloseFridgeBubble, 3800);
 }
 
+/* 长按吃掉冰箱里的即食食材：生食材给出灶台提示，不消耗、不弹确认框 */
+async function homeFridgeEat(item) {
+  if (!item) return;
+  if (!item.isReadyToEat) {
+    showToast('这是生食材，需要去灶台加工哦~');
+    return;
+  }
+  homeCloseFridgeBubble();
+  const yes = await confirmDialog('吃掉食材', `确定要吃掉【${item.name}】吗？`, '吃掉', false);
+  if (!yes) return;
+  const h = state.home;
+  const idx = h.fridge.findIndex(f => f.id === item.id);
+  if (idx < 0) return;                 /* 确认期间可能已被清理或删除 */
+  const eaten = h.fridge.splice(idx, 1)[0];
+  homePushTrace('kitchen', `你从冰箱里拿出了${eaten.emoji}${eaten.name}吃掉了。`, Date.now(), 'user');
+  persist(true);
+  showToast(`你吃掉了${eaten.emoji}${eaten.name}`);
+  /* TA 买的即食食材：吃完再补一句它的专属留言 */
+  if (eaten.addedBy === 'ta' && eaten.dialogue) {
+    setTimeout(() => showToast(`TA 的留言：${eaten.dialogue}`), 900);
+  }
+  homeRefreshIfOpen(['homefridge', 'homekitchen', 'readtogether']);
+}
+
 function renderHomeFridgePage() {
   const removed = homeCleanFridge();
   if (removed) persist(true);
@@ -19126,7 +19162,7 @@ function renderHomeFridgePage() {
       <div class="t">冰箱空空如也</div>
       <div class="d">TA 偶尔会买食材回来，你也可以自己添一些。</div>
     </div>`}
-    <div class="hm-note">每次打开冰箱都会自动清理过期食材；标签会标明是「TA买的」还是「我买的」。</div>
+    <div class="hm-note">每次打开冰箱都会自动清理过期食材；标签会标明是「TA买的」还是「我买的」。长按即食食材可以直接吃掉。</div>
   `);
   const addBtn = $('[data-fridge-add]', body);
   if (addBtn) addBtn.addEventListener('click', homeOpenAddIngredient);
@@ -19138,7 +19174,43 @@ function renderHomeFridgePage() {
       if (item.addedBy === 'ta' && item.dialogue) homeShowFridgeBubble(card, item.dialogue, false);
       else homeShowFridgeBubble(card, `这是你买的食材，记得在 ${Math.max(1, homeFridgeDaysLeft(item))} 天内吃掉。`, true);
     };
-    card.addEventListener('click', show);
+    /* 长按吃掉：500ms 触发；一旦触发就用 fired 吞掉随后的 click，避免同时弹留言气泡 */
+    let pressTimer = 0;
+    let fired = false;
+    let sx = 0, sy = 0;
+    const clearPress = () => {
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = 0; }
+      card.classList.remove('pressing');
+    };
+    const startPress = e => {
+      if (e.target.closest('[data-fridge-del]')) return;   /* 删除按钮不参与长按 */
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      fired = false;
+      sx = e.clientX || 0;
+      sy = e.clientY || 0;
+      card.classList.add('pressing');
+      pressTimer = setTimeout(() => {
+        pressTimer = 0;
+        fired = true;
+        card.classList.remove('pressing');
+        try { if (navigator.vibrate) navigator.vibrate(18); } catch (err) {}
+        homeFridgeEat(state.home.fridge.find(f => f.id === card.dataset.fridgeIng));
+      }, 500);
+    };
+    const moveCancel = e => {
+      if (!pressTimer) return;
+      if (Math.abs((e.clientX || 0) - sx) > 10 || Math.abs((e.clientY || 0) - sy) > 10) clearPress();
+    };
+    card.addEventListener('pointerdown', startPress);
+    card.addEventListener('pointermove', moveCancel);
+    card.addEventListener('pointerup', clearPress);
+    card.addEventListener('pointercancel', clearPress);
+    card.addEventListener('pointerleave', clearPress);
+    card.addEventListener('contextmenu', e => e.preventDefault());
+    card.addEventListener('click', () => {
+      if (fired) { fired = false; return; }   /* 长按已处理，忽略这次单击 */
+      show();
+    });
     card.addEventListener('keydown', e => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show(); }
     });
@@ -19165,6 +19237,12 @@ function homeOpenAddIngredient() {
       <div class="field"><label>食材名称</label><input class="input" id="hkAddName" maxlength="20" placeholder="例如：番茄"></div>
       <div class="field"><label>食材 Emoji</label><input class="input" id="hkAddEmoji" maxlength="4" placeholder="例如：🍅"></div>
       <div class="field"><label>保质期（天）</label><input class="input" id="hkAddDays" type="number" min="1" max="365" value="7"></div>
+      <div class="field"><label>类型</label>
+        <select class="input" id="hkAddReady">
+          <option value="0" selected>烹饪食材（需去灶台加工）</option>
+          <option value="1">即食（可直接长按吃掉）</option>
+        </select>
+      </div>
     `,
     actions: [
       { label: '取消' },
@@ -19172,8 +19250,9 @@ function homeOpenAddIngredient() {
         const name = $('#hkAddName', modal.el).value.trim();
         const emoji = $('#hkAddEmoji', modal.el).value.trim() || '🥡';
         const days = clamp(Math.round(Number($('#hkAddDays', modal.el).value) || 7), 1, 365);
+        const ready = $('#hkAddReady', modal.el).value === '1';
         if (!name) { showToast('请填写食材名称'); return false; }
-        homeAddFridgeItem(name, emoji, days, 'user');
+        homeAddFridgeItem(name, emoji, days, 'user', undefined, undefined, ready);
         persist(true);
         showToast(`已把【${name}】放进冰箱`);
         homeRefreshIfOpen(['homefridge', 'homekitchen', 'readtogether']);

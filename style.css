@@ -4615,9 +4615,15 @@ body.voice-recording *{
   display:grid;place-items:center;font-size:8px;color:#C7CCD5;
 }
 .hk-ing-del:active{background:#F4F5F8;color:var(--danger);}
-/* 食材可点击看留言：轻微按压反馈 + 左上角 💬 标记 */
-.hk-ing{cursor:pointer;transition:transform .12s ease,box-shadow .12s ease;}
+/* 食材可点击看留言 / 长按吃掉：轻微按压反馈 + 左上角 💬 标记 */
+.hk-ing{
+  cursor:pointer;position:relative;
+  transition:transform .12s ease,box-shadow .12s ease,background .12s ease;
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
+}
 .hk-ing:active{transform:scale(.97);}
+/* 长按计时中：下沉多一点并轻微变色，给出「正在长按」的物理反馈 */
+.hk-ing.pressing{transform:scale(.94);background:#EEF2F8;box-shadow:0 1px 4px rgba(24,44,74,.06);}
 .hk-ing-talk{position:absolute;top:5px;left:5px;font-size:9px;line-height:1;opacity:.8;}
 .hk-ing-grid{position:relative;}
 /* TA 的留言小气泡：贴在食材卡片上方，带尖角，可自动消失 */
