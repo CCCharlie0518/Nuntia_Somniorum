@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.9.0';
+const APP_VERSION = 'v9.0.0';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -692,7 +692,7 @@ function defaultState() {
     settings: {
       theme: '#007AFF',
       replyChance: 100,
-      /* 表情包发送概率：普通回复命中后，本次改为发一张共享表情包的概率 */
+      /* 表情包发送概率：普通回复命中后，本次改为从「TA的表情包」随机发一张的概率 */
       emojiSendChance: 15,
       replyDelayMin: 1,
       replyDelayMax: 3,
@@ -767,7 +767,9 @@ function defaultState() {
       enabled: true,
       ts: Date.now()
     })),
-    stickers: [],
+    /* 表情包拆分：userStickers=我的表情包（聊天面板可发送），taStickers=TA的表情包（TA 回复时随机抽取） */
+    userStickers: [],
+    taStickers: [],
     letters: [],
     moments: [],
     chats: {},
@@ -852,6 +854,8 @@ function defaultState() {
     sleep: {
       isSleeping: false,
       startTime: 0,
+      /* 本次睡眠类型：night=夜眠 / nap=午睡（手动选择或定时触发时写入） */
+      currentType: 'night',
       pendingSummary: false,
       pendingSleepData: null,
       history: []
@@ -865,6 +869,8 @@ function defaultState() {
       deletedBuiltInScenarios: [],
       deletedCategories: []
     },
+    /* 家园：来访时间 / 生活痕迹 / 衣柜 / 今日与明日穿搭 / 冰箱 / 自定义食谱 / 烹饪中 / 待处理菜品 */
+    home: homeDefaultState(),
     /* 上次离开页面的时间戳（毫秒）：离线消息横幅据此结算这段时间内的新消息与超时待办 */
     lastSeenAt: 0
   };
@@ -913,7 +919,9 @@ function migrateV1(saved) {
     settings: { theme: s.theme === '#12b7f5' || !s.theme ? '#007AFF' : s.theme },
     cardGroups: [],
     cards,
-    stickers: Array.isArray(saved.stickers) ? saved.stickers : [],
+    /* 旧版只有一个表情包数组：全部归入「我的表情包」，TA 的库留空 */
+    userStickers: Array.isArray(saved.stickers) ? saved.stickers : [],
+    taStickers: [],
     letters,
     moments: Array.isArray(saved.moments) ? saved.moments : [],
     chats: { [roleId]: messages },
@@ -937,6 +945,13 @@ function mergeState(saved) {
   out.my = Object.assign({}, d.my, src.my || {});
   out.location = Object.assign({}, d.location, src.location || {});
   out.pomodoro = Object.assign({}, d.pomodoro, src.pomodoro || {});
+  /* 表情包拆分：我的 / TA 的两套库。
+   * 旧版只有一个统一 stickers 数组，这里整体迁入 userStickers（确保老用户表情不丢），
+   * taStickers 初始为空；迁移完成后删除旧字段，避免两处数据并存。 */
+  const legacyStickers = Array.isArray(src.stickers) ? src.stickers : [];
+  out.userStickers = Array.isArray(src.userStickers) ? src.userStickers : legacyStickers;
+  out.taStickers = Array.isArray(src.taStickers) ? src.taStickers : [];
+  delete out.stickers;
   /* 美化：旧数据没有 customStyle 字段时补齐结构，避免样式自定义读取 undefined */
   out.beautify = Object.assign({}, d.beautify, src.beautify || {});
   {
@@ -969,7 +984,7 @@ function mergeState(saved) {
       if (!ap.bubble && typeof mirror.bubble === 'string') ap.bubble = mirror.bubble;
     }
   } catch (e) { /* localStorage 不可用时忽略，不影响启动 */ }
-  ['roles', 'cards', 'cardGroups', 'stickers', 'letters', 'moments', 'quizTemplates', 'userPatCards', 'taPatCards', 'periods', 'dailyReminders'].forEach(k => {
+  ['roles', 'cards', 'cardGroups', 'userStickers', 'taStickers', 'letters', 'moments', 'quizTemplates', 'userPatCards', 'taPatCards', 'periods', 'dailyReminders'].forEach(k => {
     if (!Array.isArray(out[k])) out[k] = [];
   });
   /* 拾光瓶：旧数据缺字段时补默认值，数值字段归一为非负整数 */
@@ -1038,6 +1053,8 @@ function mergeState(saved) {
         : []
     };
   }
+  /* 家园：旧数据缺字段时补默认结构；食材 / 衣服 / 食谱 / 烹饪记录逐条归一，杜绝脏数据导致渲染报错 */
+  out.home = normalizeHome(src.home);
   /* 旧版日常提醒没有长期字段：补默认值（isLongTerm=false，startDate/endDate=date），保证区间判断统一 */
   out.dailyReminders = out.dailyReminders.map(r => {
     if (!r || typeof r !== 'object') return r;
@@ -1130,6 +1147,8 @@ function mergeState(saved) {
       startTime: Number(r.startTime),
       endTime: Number(r.endTime),
       duration: Math.max(0, Number(r.duration) || (Number(r.endTime) - Number(r.startTime))),
+      /* 睡眠类型：night=夜眠 / nap=午睡；旧记录没有该字段一律视为夜眠 */
+      sleepType: r.sleepType === 'nap' ? 'nap' : 'night',
       /* 睡眠感受：结算卡中用户输入的文字，允许为空 */
       feeling: typeof r.feeling === 'string' ? r.feeling : '',
       timeline: Array.isArray(r.timeline) ? r.timeline
@@ -1146,13 +1165,14 @@ function mergeState(saved) {
     out.sleep = {
       isSleeping: (slSrc.isSleeping === true || slSrc.isSleeping === 'true') && Number(slSrc.startTime) > 0,
       startTime: Number(slSrc.startTime) || 0,
+      currentType: slSrc.currentType === 'nap' ? 'nap' : 'night',
       pendingSummary: slSrc.pendingSummary === true && !!pending,
       pendingSleepData: pending,
       history: Array.isArray(slSrc.history) ? slSrc.history.map(normSleepRecord).filter(Boolean).slice(0, 100) : []
     };
   } catch (e) {
     console.warn('[sleep] 状态归一化失败，已重置为空状态：', e);
-    out.sleep = { isSleeping: false, startTime: 0, pendingSummary: false, pendingSleepData: null, history: [] };
+    out.sleep = { isSleeping: false, startTime: 0, currentType: 'night', pendingSummary: false, pendingSleepData: null, history: [] };
   }
   out.nextTaReadInviteAt = Number(out.nextTaReadInviteAt) || 0;
   /* 定时强制睡眠：夜间 / 午睡两组的开关与时间做白名单化；兼容旧版单一定时字段 */
@@ -1573,7 +1593,8 @@ function mergeState(saved) {
     };
   }).filter(c => c.content.trim());
 
-  out.stickers = out.stickers.map(s => {
+  /* 表情包归一：我的 / TA 两套库各自清洗（旧版统一 stickers 已在函数开头迁入 userStickers） */
+  const normStickerList = arr => (Array.isArray(arr) ? arr : []).map(s => {
     const st = typeof s === 'string' ? { data: s } : (s && typeof s === 'object' ? s : {});
     return {
       id: st.id || uid(),
@@ -1582,6 +1603,8 @@ function mergeState(saved) {
       ts: st.ts || Date.now()
     };
   }).filter(s => s.data);
+  out.userStickers = normStickerList(out.userStickers);
+  out.taStickers = normStickerList(out.taStickers);
 
   out.letters = out.letters.map(l => {
     const letter = (l && typeof l === 'object') ? l : {};
@@ -5236,9 +5259,10 @@ function processReplyQueue(roleId) {
 
   typingMap.set(roleId, false);
   /* 连发：先按 replyChance 判定回复，命中后再决定本次回复形式 */
-  const stickerPool = (state.stickers || []).filter(s => s && s.data);
+  /* TA 的表情包来源：只从「TA的表情包」（taStickers）抽取，绝不混用「我的表情包」 */
+  const stickerPool = (state.taStickers || []).filter(s => s && s.data);
   const emojiChance = Number(state.settings.emojiSendChance ?? 15);
-  /* 表情包分支：命中概率且共享表情包库非空时，本次回复只发一张表情包（不拼接、不连发）；
+  /* 表情包分支：命中概率且 TA 的表情包库非空时，本次回复只发一张表情包（不拼接、不连发）；
    * 库为空自动跳过该分支，回退为正常字卡回复，不报错、不产生空白消息 */
   if (stickerPool.length && emojiChance > 0 && Math.random() * 100 < emojiChance) {
     taSendStickerReply(roleId, gen);
@@ -5265,10 +5289,10 @@ function taReplyWithCards(roleId, gen, quote) {
   });
 }
 
-/* TA 回一张表情包：与用户共用同一套表情包库，随机取一张；
+/* TA 回一张表情包：只从 TA 自己的表情包库（taStickers）随机取一张；
  * 单条消息、不参与拼接与连发，延迟与「正在输入…」时机和普通回复一致。 */
 function taSendStickerReply(roleId, gen) {
-  const pool = (state.stickers || []).filter(s => s && s.data);
+  const pool = (state.taStickers || []).filter(s => s && s.data);
   if (!pool.length) { taReplyWithCards(roleId, gen); return; }
   const quote = maybeTaQuote(roleId);
   typingMap.set(roleId, true);
@@ -5278,7 +5302,7 @@ function taSendStickerReply(roleId, gen) {
     if (gen !== (chatGenMap.get(roleId) || 0)) { finishReplyStep(roleId); return; }
     typingMap.set(roleId, false);
     /* 等待期间库可能被清空：回退为字卡回复 */
-    const now = (state.stickers || []).filter(s => s && s.data);
+    const now = (state.taStickers || []).filter(s => s && s.data);
     if (!now.length) { taReplyWithCards(roleId, gen); return; }
     const sticker = pickOne(now);
     const payload = { type: 'sticker', image: sticker.data, content: '[表情]', heartTags: makeHeartTags() };
@@ -5559,13 +5583,15 @@ function closeStickerSheet() {
 
 function renderStickerSheet(roleId) {
   const sheet = $('#stickerSheet');
+  /* 用户只能发送自己的表情包：面板只渲染 userStickers */
+  const mine = (state.userStickers || []).filter(s => s && s.data);
   sheet.innerHTML = `
     <div class="sheet-head">
-      <b>表情包</b>
+      <b>我的表情包</b>
       <button data-sticker-manage>管理 ›</button>
     </div>
-    ${state.stickers.length
-      ? `<div class="sticker-grid">${state.stickers.map(s =>
+    ${mine.length
+      ? `<div class="sticker-grid">${mine.map(s =>
           `<button class="sticker-cell" data-sticker="${s.id}"><img src="${esc(s.data)}" alt="${esc(s.name)}"></button>`).join('')}</div>`
       : '<div class="empty" style="padding:18px">还没有表情包<br>去「表情包管理」添加一些吧</div>'}`;
 
@@ -5575,7 +5601,7 @@ function renderStickerSheet(roleId) {
   });
   $$('[data-sticker]', sheet).forEach(btn => {
     btn.addEventListener('click', () => {
-      const sticker = state.stickers.find(s => s.id === btn.dataset.sticker);
+      const sticker = mine.find(s => s.id === btn.dataset.sticker);
       if (!sticker) return;
       closeStickerSheet();
       sendUserMessage(roleId, { type: 'sticker', image: sticker.data, content: '[表情]' });
@@ -6168,8 +6194,8 @@ const APP_ICONS = {
   image: '<svg viewBox="0 0 24 24"><rect x="3.4" y="4.6" width="17.2" height="14.8" rx="2.6"/><circle cx="8.8" cy="9.6" r="1.5"/><path d="m4.2 16.8 4.6-4.6 3.1 3.1 3.3-3.3 4.6 4.6"/></svg>',
   /* 右上角快捷菜单：竖排三个圆点 */
   kebab: '<svg viewBox="0 0 24 24"><circle cx="12" cy="5.2" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18.8" r="1.6"/></svg>',
-  /* 一起做：两个人贴在一起（线条风，两人依偎） */
-  readtogether: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  /* 家园：线条风小房子（屋顶 + 墙体 + 门） */
+  readtogether: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.6 11.2 12 4.2l8.4 7"/><path d="M5.6 10v9.2a1.6 1.6 0 0 0 1.6 1.6h9.6a1.6 1.6 0 0 0 1.6-1.6V10"/><path d="M9.6 20.8v-5.2h4.8v5.2"/></svg>',
   /* 一起读书：打开的书本（线条风，与「两人贴贴」明显区分） */
   readbook: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>',
   /* 一起听：线条风耳机 */
@@ -6208,7 +6234,7 @@ const HOME_APPS = [
   { route: 'gifts', label: '送礼物' },
   { route: 'pat', label: '拍一拍' },
   { route: 'pet', label: '桌面宠物' },
-  { route: 'readtogether', label: '一起做' },
+  { route: 'readtogether', label: '家园' },
   { route: 'reminder', label: '提醒' },
   { route: 'jar', label: '拾光瓶' },
   { route: 'settings', label: '设置' }
@@ -11825,6 +11851,7 @@ function subShell(title, bodyHTML, rightHTML = '') {
 }
 
 function renderSub(name) {
+  homeStopCookTimer();
   switch (name) {
     case 'cards': return renderCardsPage();
     case 'stickers': return renderStickersPage();
@@ -11854,6 +11881,13 @@ function renderSub(name) {
     case 'play': return renderPlayPage();            /* 一起玩：一起做 → 一起玩 → 五子棋 的二级页 */
     case 'games': return renderPlayPage();           /* 旧路由兜底：桌面小游戏已并入【一起玩】 */
     case 'readtogether': return renderReadTogetherPage();
+    case 'homeliving': return renderHomeRoomPage('living');
+    case 'homebedroom': return renderHomeRoomPage('bedroom');
+    case 'homestudy': return renderHomeRoomPage('study');
+    case 'homekitchen': return renderHomeRoomPage('kitchen');
+    case 'wardrobe': return renderWardrobePage();
+    case 'homefridge': return renderHomeFridgePage();
+    case 'homestove': return renderHomeStovePage();
     case 'acts': return renderActsPage();            /* 一起演绎：一起做 → 一起演绎 的二级页 */
     case 'actroom': return renderActRoomPage();      /* 演绎房间：进行中聊天 / 已完结只读回顾 */
     case 'listen': return renderListenPage();
@@ -13916,20 +13950,32 @@ function exportCards() {
 /* =========================================================
  * 十六、表情包管理
  * ========================================================= */
+/* 当前选中的表情包 Tab：'user'=我的表情包 / 'ta'=TA的表情包 */
+let stickerTab = 'user';
+function stickerList() {
+  return stickerTab === 'ta' ? state.taStickers : state.userStickers;
+}
+
 function renderStickersPage() {
+  const list = stickerList();
+  const isTa = stickerTab === 'ta';
   subShell('表情包管理', `
-    <div class="top-stat"><span>共 <b>${state.stickers.length}</b> 个表情</span></div>
+    <div class="stk-tabs">
+      <button class="stk-tab ${isTa ? '' : 'active'}" data-stk-tab="user" type="button">我的表情包<span class="n">${state.userStickers.length}</span></button>
+      <button class="stk-tab ${isTa ? 'active' : ''}" data-stk-tab="ta" type="button">TA的表情包<span class="n">${state.taStickers.length}</span></button>
+    </div>
+    <div class="top-stat"><span>${isTa ? 'TA 的表情包' : '我的表情包'}共 <b>${list.length}</b> 个</span></div>
     <div class="panel">
       <div class="row-between">
-        <div class="muted">支持本地上传（自动压缩）或填写图片链接。</div>
+        <div class="muted">${isTa ? '这里的表情只会在 TA 回复时随机发出，你不会在聊天面板看到。' : '支持本地上传（自动压缩）或填写图片链接，聊天面板里发送。'}</div>
         <div class="sticker-actions">
           <button class="btn" id="stickerBatchBtn">批量导入</button>
           <button class="btn primary" id="stickerAdd">＋ 添加</button>
         </div>
       </div>
     </div>
-    ${state.stickers.length
-      ? `<div class="sticker-manage-grid">${state.stickers.map(s => `
+    ${list.length
+      ? `<div class="sticker-manage-grid">${list.map(s => `
           <div class="sticker-card">
             <div class="thumb" data-preview="${s.id}"><img src="${esc(s.data)}" alt=""></div>
             <div class="nm">${esc(s.name)}</div>
@@ -13938,7 +13984,14 @@ function renderStickersPage() {
               <button class="btn-sm" data-sticker-del="${s.id}" style="color:#ff5a5f">删除</button>
             </div>
           </div>`).join('')}</div>`
-      : '<div class="empty">还没有表情包<br>添加后即可在聊天面板发送</div>'}`);
+      : `<div class="empty">${isTa ? 'TA 还没有表情包' : '还没有表情包'}<br>${isTa ? '添加后 TA 聊天时会随机发送' : '添加后即可在聊天面板发送'}</div>`}`);
+
+  /* Tab 切换：只切换数据源并重绘，上传/导入/删除全部跟随当前 Tab */
+  $$('[data-stk-tab]').forEach(btn => btn.addEventListener('click', () => {
+    if (btn.dataset.stkTab === stickerTab) return;
+    stickerTab = btn.dataset.stkTab;
+    renderStickersPage();
+  }));
 
   $('#stickerAdd').addEventListener('click', () => openStickerEditor(null));
   /* 批量导入按钮：唤起常驻的多选输入框 */
@@ -13949,16 +14002,18 @@ function renderStickersPage() {
     input.click();
   });
   $$('[data-preview]').forEach(el => el.addEventListener('click', () => {
-    const s = state.stickers.find(x => x.id === el.dataset.preview);
+    const s = list.find(x => x.id === el.dataset.preview);
     if (s) showLightbox(s.data);
   }));
   $$('[data-sticker-edit]').forEach(btn => btn.addEventListener('click', () => openStickerEditor(btn.dataset.stickerEdit)));
   $$('[data-sticker-del]').forEach(btn => btn.addEventListener('click', async () => {
-    const s = state.stickers.find(x => x.id === btn.dataset.stickerDel);
+    const arr = stickerList();
+    const s = arr.find(x => x.id === btn.dataset.stickerDel);
     if (!s) return;
     const ok = await confirmDialog('删除表情', `确定删除「${s.name}」吗？`, '删除', true);
     if (!ok) return;
-    state.stickers = state.stickers.filter(x => x.id !== s.id);
+    if (stickerTab === 'ta') state.taStickers = arr.filter(x => x.id !== s.id);
+    else state.userStickers = arr.filter(x => x.id !== s.id);
     persist();
     renderStickersPage();
     showToast('已删除');
@@ -14014,10 +14069,12 @@ function hideStickerLoading() {
   stickerLoadingEl = null;
 }
 
-/* 批量入库：一次性写盘；容量不足时回滚这批表情并给出专项提示，避免内存与落盘不一致 */
-async function saveStickerBatch(added) {
-  const before = state.stickers.slice();
-  state.stickers = before.concat(added);
+/* 批量入库：一次性写盘；容量不足时回滚这批表情并给出专项提示，避免内存与落盘不一致。
+ * key 指定写入哪一套库（userStickers / taStickers），绝不影响另一套 */
+async function saveStickerBatch(added, key) {
+  const k = key === 'taStickers' ? 'taStickers' : 'userStickers';
+  const before = state[k].slice();
+  state[k] = before.concat(added);
   try {
     let ok = true;
     if (Storage.mode === 'local') {
@@ -14030,17 +14087,19 @@ async function saveStickerBatch(added) {
     if (!ok) throw new Error('storage-write-failed');
     return true;
   } catch (err) {
-    state.stickers = before;                 /* 回滚：列表与本地数据保持一致 */
+    state[k] = before;                       /* 回滚：列表与本地数据保持一致 */
     showToast('存储空间不足，请删除部分旧表情包后再试');
     if (currentRoute && currentRoute.page === 'sub' && currentRoute.name === 'stickers') renderStickersPage();
     return false;
   }
 }
 
-/* 批量导入主流程：逐张读取并压缩（最大边 200px / JPEG 0.7），全部完成后统一入库 */
+/* 批量导入主流程：逐张读取并压缩（最大边 200px / JPEG 0.7），全部完成后统一入库。
+ * 导入开始时锁定目标库，处理途中切换 Tab 也不会写错地方 */
 async function importStickerFiles(files) {
   const list = Array.from(files || []);
   if (!list.length) return;
+  const targetKey = stickerTab === 'ta' ? 'taStickers' : 'userStickers';
   showStickerLoading('正在批量导入表情包...');
   const added = [];
   for (let i = 0; i < list.length; i++) {   /* 串行 for + await：绝不同时压缩多张，避免浏览器卡死 */
@@ -14057,16 +14116,19 @@ async function importStickerFiles(files) {
     showToast('没有可导入的图片');
     return;
   }
-  const ok = await saveStickerBatch(added);
+  const ok = await saveStickerBatch(added, targetKey);
   if (!ok) return;                          /* 失败提示已在保存函数内给出 */
   if (currentRoute && currentRoute.page === 'sub' && currentRoute.name === 'stickers') renderStickersPage();
   showToast(`成功导入了 ${added.length} 张表情包`);
 }
 
 function openStickerEditor(id) {
-  const sticker = state.stickers.find(s => s.id === id);
+  /* 编辑/新增都只作用于当前 Tab 对应的库 */
+  const arr = stickerList();
+  const sticker = arr.find(s => s.id === id);
+  const targetKey = stickerTab === 'ta' ? 'taStickers' : 'userStickers';
   const modal = showModal({
-    title: sticker ? '编辑表情' : '添加表情包',
+    title: sticker ? '编辑表情' : (stickerTab === 'ta' ? '添加 TA 的表情包' : '添加表情包'),
     body: `
       <div style="text-align:center;margin-bottom:10px" id="stPreviewBox">
         ${sticker ? `<img src="${esc(sticker.data)}" style="max-height:110px;border-radius:10px" alt="">` : '<div class="empty" style="padding:12px">还没有选择图片</div>'}
@@ -14094,7 +14156,7 @@ function openStickerEditor(id) {
             sticker.name = name;
             sticker.data = data;
           } else {
-            state.stickers.push({ id: uid(), name, data, ts: Date.now() });
+            state[targetKey].push({ id: uid(), name, data, ts: Date.now() });
           }
           persist();
           renderStickersPage();
@@ -16075,17 +16137,20 @@ function startStatusCooldownTicker(roleId) {
   statusCdTimer = setInterval(tick, 1000);
 }
 
-/* 昨夜睡眠：只读取「一起睡觉」的真实记录；没有任何记录时返回 0（UI 显示「暂未记录」），绝不随机生成 */
+/* 昨夜睡眠：只读取「一起睡觉」中真正的夜眠记录（sleepType==='night'），
+ * 且必须在最近 24 小时内结束；午睡记录绝不参与，没有合格记录返回 0（UI 显示「暂未记录」） */
 function lastNightSleepMs() {
   const hist = (state.sleep && Array.isArray(state.sleep.history)) ? state.sleep.history : [];
-  const cutoff = Date.now() - 30 * 3600 * 1000;
+  const now = Date.now();
+  const cutoff = now - 24 * 3600 * 1000;
   const cand = hist
-    .filter(r => r && Number(r.endTime) >= cutoff && Number(r.duration) > 0)
+    .filter(r => r && r.sleepType !== 'nap' && Number(r.duration) > 0 &&
+      Number(r.endTime) >= cutoff && Number(r.endTime) <= now + 60000)
     .sort((a, b) => Number(b.endTime) - Number(a.endTime))[0];
   if (cand) return Number(cand.duration);
-  /* 结算卡已填但还没落历史时，也认这份 pending */
+  /* 结算卡已填但还没落历史时，也认这份 pending（同样必须不是午睡） */
   const pend = state.sleep && state.sleep.pendingSleepData;
-  if (pend && Number(pend.duration) > 0) return Number(pend.duration);
+  if (pend && pend.sleepType !== 'nap' && Number(pend.duration) > 0) return Number(pend.duration);
   return 0;
 }
 
@@ -16431,7 +16496,7 @@ function renderStoragePage() {
   /* 聊天图片消息张数（纳入存储感知统计） */
   const chatImgCount = state.roles.reduce((n, r) =>
     n + (state.chats[r.id] || []).reduce((k, m) => k + (Array.isArray(m.images) ? m.images.length : 0), 0), 0);
-  const stickerCount = state.stickers.length;
+  const stickerCount = state.userStickers.length + state.taStickers.length;
   const momentCount = state.moments.length;
   const letterCount = state.letters.length;
 
@@ -16528,7 +16593,7 @@ function renderStoragePage() {
     if (!box) return;
     const chatsBytes = state.roles.reduce((n, r) => n + jsonBytes(state.chats[r.id] || []), 0);
     const booksBytes = state.readData.books.reduce((n, b) => n + jsonBytes(b.paras || []), 0);
-    const stickersBytes = jsonBytes(state.stickers || []);
+    const stickersBytes = jsonBytes((state.userStickers || []).concat(state.taStickers || []));
     const cardsBytes = jsonBytes({ c: state.cards, g: state.cardGroups, p: [state.userPatCards, state.taPatCards] });
     const imgBytes = jsonBytes([
       state.beautify, state.photoWall, state.pet, state.couple,
@@ -16764,7 +16829,7 @@ function renderProbabilityPage() {
     <div class="panel" id="section-reply">
       <div class="panel-title">字卡回复</div>
       ${sliderRowHTML('字卡回复概率', '未触发回复时，在你的消息下显示「已读」小字', 'replyChance', s.replyChance, 0, 100, '%')}
-      ${sliderRowHTML('表情包发送概率', `普通回复命中后，本次改为发送一张共享表情包的概率；表情包与「表情包管理」共用同一套库，库为空时自动回退为字卡回复；表情包单条发送，不参与拼接与连发`, 'emojiSendChance', s.emojiSendChance, 0, 100, '%')}
+      ${sliderRowHTML('表情包发送概率', `普通回复命中后，本次改为从「TA的表情包」中随机发送一张的概率；TA 只会发自己库里的表情包，该库为空时自动回退为字卡回复；表情包单条发送，不参与拼接与连发`, 'emojiSendChance', s.emojiSendChance, 0, 100, '%')}
       ${sliderRowHTML('最短回复时间', `${dn} 收到消息后至少等待多久再回复，单位：秒；0 表示不等待`, 'replyDelayMin', s.replyDelayMin, 0, 300, '秒')}
       ${sliderRowHTML('最长回复时间', `不得小于最短回复时间；对所有 ${dn} 消息（字卡回复、礼物感谢、收款提示、链接测试结果、通话与空间互动等）生效`, 'replyDelayMax', s.replyDelayMax, 0, 300, '秒')}
       ${sliderRowHTML('拼字卡概率', '命中概率时拼接多张字卡，未命中则只发单张；对所有字卡回复生效', 'mergeChance', s.mergeChance, 0, 100, '%')}
@@ -17940,86 +18005,1217 @@ function rdEndSession() {
   persist();
 }
 
-/* ---------- 【一起做】页 ---------- */
+/* =========================================================
+ * 二十三·五·〇、【家园】同居生活系统（由原【一起做】升级而来）
+ * 主界面：来访时间 / 生活痕迹时间轴 / 四大区域导航
+ * 客厅：游戏机、留声机；书房：书架、小剧场、书桌；卧室：双人床、衣柜；厨房：冰箱、灶台
+ * 数据统一落在 state.home，全部经 normalizeHome 归一后持久化。
+ * ========================================================= */
+const HOME_ICONS = {
+  house: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.6 11.2 12 4.2l8.4 7"/><path d="M5.6 10v9.2a1.6 1.6 0 0 0 1.6 1.6h9.6a1.6 1.6 0 0 0 1.6-1.6V10"/><path d="M9.6 20.8v-5.2h4.8v5.2"/></svg>',
+  living: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.6 11.4V9a2.4 2.4 0 0 1 2.4-2.4h10A2.4 2.4 0 0 1 19.4 9v2.4"/><path d="M4.6 11.4a1.8 1.8 0 0 0-1.8 1.8v3.2h18.4v-3.2a1.8 1.8 0 0 0-1.8-1.8"/><path d="M4.8 16.4v2M19.2 16.4v2"/><path d="M8.4 11.4h7.2"/></svg>',
+  bedroom: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.4 18.2V9.4"/><path d="M3.4 14.2h17.2v4"/><path d="M6.6 9.6h5a2 2 0 0 1 0 4h-5Z"/><path d="M20.6 11.2v7"/><path d="M14.6 10.2h3.4a2.6 2.6 0 0 1 2.6 2.6v1.4"/></svg>',
+  study: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="4.6" height="16" rx="1.2"/><rect x="9.6" y="4" width="4.6" height="16" rx="1.2"/><path d="m15.4 5.4 4 1.2v13l-4-1.2Z"/></svg>',
+  kitchen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9.6h14v5.2a5.2 5.2 0 0 1-5.2 5.2H10.2A5.2 5.2 0 0 1 5 14.8Z"/><path d="M5.4 11.2H3.2M18.6 11.2h2.2"/><path d="M9.4 6.4c0-1.2 1.2-1.2 1.2-2.4M13.6 6.4c0-1.2 1.2-1.2 1.2-2.4"/></svg>',
+  wardrobe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8.4V7.2a2 2 0 1 1 2-2"/><path d="m12 8.4-7.4 5.2A1.4 1.4 0 0 0 5.4 16h13.2a1.4 1.4 0 0 0 .8-2.4Z"/></svg>',
+  fridge: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="3.4" width="12" height="17.2" rx="2.2"/><path d="M6 10.6h12"/><path d="M9.2 6.6v1.6M9.2 13.4v2.4"/></svg>',
+  stove: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.4" y="4.6" width="17.2" height="14.8" rx="2.2"/><circle cx="8.4" cy="9.4" r="1.4"/><circle cx="15.6" cy="9.4" r="1.4"/><path d="M3.4 14.2h17.2M8 17.4h8"/></svg>',
+  trace: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.6V12l3 1.8"/></svg>'
+};
+
+const HOME_ROOMS = [
+  { key: 'living', name: '客厅', desc: '游戏机 · 留声机', icon: HOME_ICONS.living },
+  { key: 'bedroom', name: '卧室', desc: '双人床 · 衣柜', icon: HOME_ICONS.bedroom },
+  { key: 'study', name: '书房', desc: '书架 · 小剧场 · 书桌', icon: HOME_ICONS.study },
+  { key: 'kitchen', name: '厨房', desc: '冰箱 · 灶台', icon: HOME_ICONS.kitchen }
+];
+
+/* 衣柜五个部位：头饰 / 上衣 / 裤子 / 鞋子 / 小饰品。
+ * 头饰与小饰品为可选部位，允许 null；上衣、裤子、鞋子为基础项，同样兼容空值。 */
+const WARDROBE_OPTIONAL_SLOTS = ['head', 'accessory'];
+const WARDROBE_SLOTS = [
+  { key: 'head', label: '头饰' },
+  { key: 'top', label: '上衣' },
+  { key: 'pants', label: '裤子' },
+  { key: 'shoes', label: '鞋子' },
+  { key: 'accessory', label: '小饰品' }
+];
+
+const HOME_CLOTH_CAT_LABEL = { head: '头饰', top: '上衣', pants: '裤子', shoes: '鞋子', accessory: '小饰品' };
+
+/* 初始衣柜：每个部位至少一件，首次进入就有搭配可玩 */
+const HOME_DEFAULT_CLOTHES = [
+  { id: 'cl-h1', cat: 'head', name: '针织贝雷帽', emoji: '🎩' },
+  { id: 'cl-h2', cat: 'head', name: '毛线帽', emoji: '🧢' },
+  { id: 'cl-t1', cat: 'top', name: '米色卫衣', emoji: '👕' },
+  { id: 'cl-t2', cat: 'top', name: '白衬衫', emoji: '👔' },
+  { id: 'cl-t3', cat: 'top', name: '针织开衫', emoji: '🧥' },
+  { id: 'cl-p1', cat: 'pants', name: '直筒牛仔裤', emoji: '👖' },
+  { id: 'cl-p2', cat: 'pants', name: '居家短裤', emoji: '🩳' },
+  { id: 'cl-s1', cat: 'shoes', name: '帆布鞋', emoji: '👟' },
+  { id: 'cl-s2', cat: 'shoes', name: '毛绒拖鞋', emoji: '🥿' },
+  { id: 'cl-s3', cat: 'shoes', name: '短靴', emoji: '👢' },
+  { id: 'cl-a1', cat: 'accessory', name: '珍珠项链', emoji: '📿' },
+  { id: 'cl-a2', cat: 'accessory', name: '细银耳夹', emoji: '✨' },
+  { id: 'cl-a3', cat: 'accessory', name: '格纹围巾', emoji: '🧣' }
+];
+
+/* 内置食材库：名称 / Emoji / 默认保质期（天） */
+const HOME_INGREDIENTS = [
+  { name: '番茄', emoji: '🍅', days: 7 },
+  { name: '鸡蛋', emoji: '🥚', days: 20 },
+  { name: '土豆', emoji: '🥔', days: 20 },
+  { name: '牛肉', emoji: '🥩', days: 5 },
+  { name: '青菜', emoji: '🥬', days: 5 },
+  { name: '胡萝卜', emoji: '🥕', days: 14 },
+  { name: '面条', emoji: '🍜', days: 30 },
+  { name: '米饭', emoji: '🍚', days: 3 },
+  { name: '牛奶', emoji: '🥛', days: 7 },
+  { name: '蘑菇', emoji: '🍄', days: 5 },
+  { name: '豆腐', emoji: '🧊', days: 3 },
+  { name: '虾', emoji: '🦐', days: 3 },
+  { name: '葱', emoji: '🌿', days: 7 },
+  { name: '芝士', emoji: '🧀', days: 20 },
+  { name: '鸡肉', emoji: '🍗', days: 3 },
+  { name: '玉米', emoji: '🌽', days: 7 }
+];
+
+/* 内置食谱：统一结构 = 菜名 / 菜品 Emoji / 食材数组（名称 + Emoji）/ 烹饪时间（分钟） */
+const HOME_RECIPES = [
+  { id: 'r1', name: '番茄炒蛋', dishEmoji: '🍳', ingredients: [{ name: '番茄', emoji: '🍅' }, { name: '鸡蛋', emoji: '🥚' }], time: 5 },
+  { id: 'r2', name: '土豆炖牛肉', dishEmoji: '🍲', ingredients: [{ name: '土豆', emoji: '🥔' }, { name: '牛肉', emoji: '🥩' }], time: 25 },
+  { id: 'r3', name: '青菜面', dishEmoji: '🍜', ingredients: [{ name: '青菜', emoji: '🥬' }, { name: '面条', emoji: '🍜' }, { name: '葱', emoji: '🌿' }], time: 10 },
+  { id: 'r4', name: '蛋炒饭', dishEmoji: '🍚', ingredients: [{ name: '米饭', emoji: '🍚' }, { name: '鸡蛋', emoji: '🥚' }, { name: '葱', emoji: '🌿' }], time: 8 },
+  { id: 'r5', name: '蘑菇豆腐汤', dishEmoji: '🥣', ingredients: [{ name: '蘑菇', emoji: '🍄' }, { name: '豆腐', emoji: '🧊' }, { name: '葱', emoji: '🌿' }], time: 12 },
+  { id: 'r6', name: '芝士焗虾', dishEmoji: '🦐', ingredients: [{ name: '虾', emoji: '🦐' }, { name: '芝士', emoji: '🧀' }], time: 15 },
+  { id: 'r7', name: '胡萝卜炒蛋', dishEmoji: '🥕', ingredients: [{ name: '胡萝卜', emoji: '🥕' }, { name: '鸡蛋', emoji: '🥚' }], time: 7 },
+  { id: 'r8', name: '牛奶玉米羹', dishEmoji: '🥛', ingredients: [{ name: '牛奶', emoji: '🥛' }, { name: '玉米', emoji: '🌽' }], time: 10 }
+];
+
+/* TA 的生活痕迹行为池：按区域随机抽取，全部为内置文案。
+ * 每条文案都必须自带主语「TA」，避免在时间轴里出现主语不明的句子。 */
+const HOME_TRACE_POOL = {
+  living: [
+    'TA把沙发上的抱枕摆好，窝在角落发了会儿呆',
+    'TA打开留声机，放了一首很旧的歌',
+    'TA在游戏机前打了两局，输了还嘴硬',
+    'TA把客厅的小灯调暗，只留了一盏夜灯',
+    'TA路过客厅时顺手给绿植浇了水'
+  ],
+  bedroom: [
+    'TA把被子叠得整整齐齐',
+    'TA在衣柜前挑了半天衣服，最后还是穿了昨天那套',
+    'TA午睡了一小会儿，醒来头发翘起来',
+    'TA把换季的衣服收进了衣柜最上层',
+    'TA靠在床头刷了会儿手机才肯起床'
+  ],
+  study: [
+    'TA翻了几页你上次没读完的书',
+    'TA在小剧场里对着空气练习台词',
+    'TA安静地坐在书桌旁陪你专注了一会儿',
+    'TA把书架上的书按颜色重新排了一遍',
+    'TA写了一张便签，压在你的书页里'
+  ],
+  kitchen: [
+    'TA从冰箱里拿了一瓶牛奶',
+    'TA在灶台前煮了一碗面，厨房里全是香味',
+    'TA洗了几个番茄，摆在沥水架上',
+    'TA打开冰箱看了一圈，又默默关上',
+    'TA烧了一壶热水，给你留了半杯'
+  ]
+};
+const HOME_TRACE_ROOMS = { living: '客厅', bedroom: '卧室', study: '书房', kitchen: '厨房' };
+
+const HOME_TRACE_GAP_MS = 3 * 60 * 60 * 1000;    /* 离开超过 3 小时，回来时随机补 1~2 条生活痕迹 */
+const HOME_TA_BUY_GAP_MS = 5 * 60 * 60 * 1000;   /* TA 至少 5 小时才会补一次冰箱 */
+const HOME_TA_COOK_GAP_MS = 4 * 60 * 60 * 1000;  /* TA 至少 4 小时才会主动做一次饭 */
+const HOME_TA_EAT_DELAY_MS = 60 * 1000;          /* 留给 TA 的菜，1 分钟后 TA 会吃掉并留字卡 */
+const HOME_TRACE_MAX = 60;
+
+let homeCookTimer = null;                        /* 灶台倒计时（仅页面打开期间存在） */
+const homeSession = { prevMe: 0, prevTa: 0 };    /* 本次启动时捕获的「上次来访」时间，用于顶部展示 */
+
+function homeDefaultState() {
+  return {
+    lastVisitTa: 0,
+    lastVisitMe: 0,
+    lastTraceAt: 0,
+    traces: [],
+    clothes: HOME_DEFAULT_CLOTHES.map(c => Object.assign({}, c)),
+    todayOutfit: { head: null, top: null, pants: null, shoes: null, accessory: null },
+    outfitDate: '',
+    nextOutfit: null,
+    fridge: [],
+    recipes: [],
+    cooking: [],
+    dishes: [],
+    lastTaBuyAt: 0,
+    lastTaCookAt: 0,
+    firstBootDone: false
+  };
+}
+
+function homeNormOutfitItem(x) {
+  if (!x || typeof x !== 'object') return null;
+  const name = String(x.name || '').trim().slice(0, 20);
+  if (!name) return null;
+  return { name, emoji: String(x.emoji || '👕').slice(0, 4) };
+}
+
+function homeNormOutfit(x) {
+  const out = { head: null, top: null, pants: null, shoes: null, accessory: null };
+  const src = (x && typeof x === 'object') ? x : {};
+  WARDROBE_SLOTS.forEach(s => { out[s.key] = homeNormOutfitItem(src[s.key]); });
+  return out;
+}
+
+function normalizeHome(src) {
+  const d = homeDefaultState();
+  const out = Object.assign({}, d);
+  const s = (src && typeof src === 'object') ? src : {};
+  out.lastVisitTa = Math.max(0, Number(s.lastVisitTa) || 0);
+  out.lastVisitMe = Math.max(0, Number(s.lastVisitMe) || 0);
+  out.lastTraceAt = Math.max(0, Number(s.lastTraceAt) || 0);
+  out.lastTaBuyAt = Math.max(0, Number(s.lastTaBuyAt) || 0);
+  out.lastTaCookAt = Math.max(0, Number(s.lastTaCookAt) || 0);
+  out.firstBootDone = s.firstBootDone === true;
+  out.traces = Array.isArray(s.traces) ? s.traces.filter(t => t && typeof t === 'object' && t.text).map(t => ({
+    id: String(t.id || uid()),
+    ts: Number(t.ts) || Date.now(),
+    room: HOME_TRACE_ROOMS[t.room] ? t.room : 'living',
+    actor: homeTraceActorOf(t),
+    text: String(t.text).slice(0, 80)
+  })).sort((a, b) => b.ts - a.ts).slice(0, HOME_TRACE_MAX) : [];
+  /* 衣服：数组存在就逐条清洗（允许用户删空）；不存在才补默认衣柜 */
+  out.clothes = Array.isArray(s.clothes)
+    ? s.clothes.filter(c => c && typeof c === 'object').map(c => {
+      const cat = WARDROBE_SLOTS.some(x => x.key === c.cat) ? c.cat : '';
+      const name = String(c.name || '').trim().slice(0, 20);
+      if (!cat || !name) return null;
+      return { id: String(c.id || uid()), cat, name, emoji: String(c.emoji || '👕').slice(0, 4) };
+    }).filter(Boolean)
+    : d.clothes;
+  out.todayOutfit = homeNormOutfit(s.todayOutfit);
+  out.outfitDate = typeof s.outfitDate === 'string' ? s.outfitDate : '';
+  out.nextOutfit = s.nextOutfit ? homeNormOutfit(s.nextOutfit) : null;
+  out.fridge = Array.isArray(s.fridge) ? s.fridge.filter(f => f && typeof f === 'object').map(f => {
+    const name = String(f.name || '').trim().slice(0, 20);
+    if (!name) return null;
+    const boughtAt = Number(f.boughtAt) || Date.now();
+    return {
+      id: String(f.id || uid()),
+      name,
+      emoji: String(f.emoji || '🥡').slice(0, 4),
+      boughtAt,
+      expireAt: Number(f.expireAt) || (boughtAt + 7 * 86400000),
+      addedBy: f.addedBy === 'ta' ? 'ta' : 'user'
+    };
+  }).filter(Boolean) : [];
+  out.recipes = Array.isArray(s.recipes) ? s.recipes.filter(r => r && typeof r === 'object').map(r => {
+    const name = String(r.name || '').trim().slice(0, 20);
+    const ingredients = (Array.isArray(r.ingredients) ? r.ingredients : [])
+      .filter(i => i && String(i.name || '').trim())
+      .map(i => ({ name: String(i.name).trim().slice(0, 20), emoji: String(i.emoji || '🥄').slice(0, 4) }));
+    if (!name || !ingredients.length) return null;
+    return {
+      id: String(r.id || ('rc-' + uid())),
+      name,
+      dishEmoji: String(r.dishEmoji || '🍲').slice(0, 4),
+      ingredients,
+      time: Math.max(1, Math.round(Number(r.time) || 5)),
+      custom: true
+    };
+  }).filter(Boolean) : [];
+  out.cooking = Array.isArray(s.cooking) ? s.cooking.filter(c => c && typeof c === 'object' && c.name).map(c => ({
+    id: String(c.id || uid()),
+    name: String(c.name).slice(0, 20),
+    dishEmoji: String(c.dishEmoji || '🍲').slice(0, 4),
+    startedAt: Number(c.startedAt) || Date.now(),
+    readyAt: Number(c.readyAt) || (Date.now() + 5 * 60000)
+  })) : [];
+  out.dishes = Array.isArray(s.dishes) ? s.dishes.filter(x => x && typeof x === 'object' && x.name).map(x => {
+    /* chef = 这道菜真正的制作者；旧数据没有 chef 时回落到 by，两者都没有则视为我做的 */
+    const chef = (x.chef === 'ta' || x.chef === 'user') ? x.chef : (x.by === 'ta' ? 'ta' : 'user');
+    return {
+      id: String(x.id || uid()),
+      name: String(x.name).slice(0, 20),
+      dishEmoji: String(x.dishEmoji || '🍲').slice(0, 4),
+      ts: Number(x.ts) || Date.now(),
+      chef,
+      by: chef,
+      leftForTa: x.leftForTa === true,
+      leftAt: Number(x.leftAt) || 0
+    };
+  }) : [];
+  return out;
+}
+
+/* ---------- 家园通用工具 ---------- */
+function homeRoleId() {
+  return state.activeRoleId || (state.roles[0] && state.roles[0].id) || '';
+}
+function homeRandPick(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+function homeRandInt(lo, hi) {
+  return lo + Math.floor(Math.random() * (hi - lo + 1));
+}
+function homeAgoText(ts) {
+  const t = Number(ts) || 0;
+  if (!t) return '还没来过';
+  const diff = Math.max(0, Date.now() - t);
+  if (diff < 60 * 1000) return '刚刚来过';
+  if (diff < 3600 * 1000) return Math.max(1, Math.floor(diff / 60000)) + ' 分钟前来过';
+  if (diff < 86400 * 1000) return Math.max(1, Math.floor(diff / 3600000)) + ' 小时前来过';
+  return Math.max(1, Math.floor(diff / 86400000)) + ' 天前来过';
+}
+function homeTraceTime(ts) {
+  const t = Number(ts) || Date.now();
+  const d = new Date(t);
+  const hm = pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  if (statusDateKey(t) === statusDateKey()) return '今天 ' + hm;
+  if (statusDateKey(t) === statusDateKey(Date.now() - 86400000)) return '昨天 ' + hm;
+  return (d.getMonth() + 1) + ' 月 ' + d.getDate() + ' 日 ' + hm;
+}
+function homeFmtLeft(ms) {
+  const sec = Math.max(0, Math.ceil(ms / 1000));
+  return Math.floor(sec / 60) + ':' + pad2(sec % 60);
+}
+/* 痕迹归属：ta=TA 的主动行为，user=用户自己的操作，system=系统旁白 */
+const HOME_TRACE_ACTORS = ['ta', 'user', 'system'];
+/* 旧存档没有 actor 字段：按文案特征推断归属，判断不了的一律算 TA（旧版池子里只有 TA 的行为） */
+function homeTraceActorOf(t) {
+  const a = t && t.actor;
+  if (HOME_TRACE_ACTORS.indexOf(a) > -1) return a;
+  const txt = String((t && t.text) || '');
+  if (/^(系上围裙|吃掉了|你)/.test(txt)) return 'user';
+  if (/^(灶台上飘出香味|厨房里飘出)/.test(txt)) return 'system';
+  return 'ta';
+}
+/* 生活痕迹统一入口：actor 必须显式传入，未传或非法值按旁白处理，绝不冒充 TA */
+function homePushTrace(room, text, ts, actor) {
+  if (!state || !state.home) return;
+  const key = HOME_TRACE_ROOMS[room] ? room : 'living';
+  const who = HOME_TRACE_ACTORS.indexOf(actor) > -1 ? actor : 'system';
+  state.home.traces.unshift({
+    id: uid(),
+    ts: Number(ts) || Date.now(),
+    room: key,
+    actor: who,
+    text: String(text || '').slice(0, 80)
+  });
+  if (state.home.traces.length > HOME_TRACE_MAX) state.home.traces.length = HOME_TRACE_MAX;
+}
+function homeRandomTrace(ts) {
+  const room = homeRandPick(Object.keys(HOME_TRACE_POOL));
+  homePushTrace(room, homeRandPick(HOME_TRACE_POOL[room]), ts, 'ta');
+}
+/* 超过设定时间没有新痕迹 → 随机补 1~2 条；返回新增条数 */
+function homeEnsureTraces() {
+  const h = state.home;
+  const now = Date.now();
+  if (!h.lastTraceAt) { h.lastTraceAt = now; return 0; }
+  if (now - h.lastTraceAt < HOME_TRACE_GAP_MS) return 0;
+  const count = Math.random() < 0.55 ? 1 : 2;
+  for (let i = 0; i < count; i++) homeRandomTrace(now - homeRandInt(10, 170) * 60000);
+  h.lastTraceAt = now;
+  return count;
+}
+
+/* ---------- 衣柜 ---------- */
+function homeSlotIsOptional(slotKey) {
+  return WARDROBE_OPTIONAL_SLOTS.indexOf(slotKey) > -1;
+}
+/* 随机挑一件：头饰 / 小饰品有 50% 概率不戴，让每天造型更自然 */
+function homeRandomClothFor(slotKey) {
+  const pool = state.home.clothes.filter(c => c.cat === slotKey);
+  if (!pool.length) return null;
+  if (homeSlotIsOptional(slotKey) && Math.random() < 0.5) return null;
+  const c = homeRandPick(pool);
+  return { name: c.name, emoji: c.emoji };
+}
+/* 跨天换装：优先穿用户昨晚搭配的 nextOutfit，否则随机一套 */
+function homeEnsureOutfit() {
+  const h = state.home;
+  const today = statusDateKey();
+  if (!h.outfitDate) {
+    h.outfitDate = today;
+    WARDROBE_SLOTS.forEach(s => {
+      if (!h.todayOutfit[s.key]) h.todayOutfit[s.key] = homeRandomClothFor(s.key);
+    });
+    return true;
+  }
+  if (h.outfitDate === today) return false;
+  const planned = h.nextOutfit;
+  const hasPlan = !!planned;
+  const outfit = {};
+  WARDROBE_SLOTS.forEach(s => {
+    /* 有手工搭配就严格按搭配执行（null 表示故意不戴）；没有才随机 */
+    outfit[s.key] = hasPlan ? (planned[s.key] || null) : homeRandomClothFor(s.key);
+  });
+  h.todayOutfit = outfit;
+  h.nextOutfit = null;
+  h.outfitDate = today;
+  homePushTrace('bedroom', planned ? 'TA换上了你昨晚替 TA 搭配好的那套衣服' : 'TA在衣柜前随手搭了一套衣服', undefined, 'ta');
+  return true;
+}
+function homeWardrobeDesc() {
+  const h = state.home;
+  const n = WARDROBE_SLOTS.filter(s => h.todayOutfit && h.todayOutfit[s.key]).length;
+  return h.nextOutfit ? '今日已穿好 · 明天的搭配也安排好了' : `今日穿搭 ${n} 件 · 还没为 TA 搭配明天`;
+}
+
+/* ---------- 冰箱 ---------- */
+function homeAddFridgeItem(name, emoji, days, addedBy, ts) {
+  const now = Number(ts) || Date.now();
+  const d = Math.max(1, Number(days) || 7);
+  state.home.fridge.push({
+    id: uid(),
+    name: String(name).slice(0, 20),
+    emoji: String(emoji || '🥡').slice(0, 4),
+    boughtAt: now,
+    expireAt: now + d * 86400000,
+    addedBy: addedBy === 'ta' ? 'ta' : 'user'
+  });
+}
+/* 自动清理过期食材：返回清理数量（打开冰箱时调用） */
+function homeCleanFridge() {
+  const now = Date.now();
+  const before = state.home.fridge.length;
+  state.home.fridge = state.home.fridge.filter(f => !(Number(f.expireAt) > 0 && Number(f.expireAt) <= now));
+  return before - state.home.fridge.length;
+}
+function homeFridgeDaysLeft(f) {
+  return Math.ceil((Number(f.expireAt) - Date.now()) / 86400000);
+}
+function homeFridgeHint() {
+  const soon = state.home.fridge.filter(f => homeFridgeDaysLeft(f) <= 2).length;
+  return soon ? `${soon} 份快过期了` : '都很新鲜';
+}
+
+/* ---------- 食谱与灶台 ---------- */
+function homeAllRecipes() {
+  return HOME_RECIPES.concat(state.home.recipes || []);
+}
+function homeRecipeById(id) {
+  return homeAllRecipes().find(r => r.id === id) || null;
+}
+/* 统计食谱所需食材数量（同名食材需要多份，例如两个鸡蛋） */
+function homeRecipeNeed(recipe) {
+  const need = {};
+  (recipe.ingredients || []).forEach(ing => {
+    need[ing.name] = (need[ing.name] || 0) + 1;
+  });
+  return need;
+}
+/* 严格校验：冰箱里每一种所需食材的数量都必须足够 */
+function homeRecipeCheck(recipe) {
+  const need = homeRecipeNeed(recipe);
+  const missing = [];
+  Object.keys(need).forEach(name => {
+    const have = state.home.fridge.filter(f => f.name === name).length;
+    if (have < need[name]) missing.push({ name, need: need[name], have });
+  });
+  return { ok: missing.length === 0, missing, need };
+}
+/* 消耗食材：同名食材优先用最快过期的那份 */
+function homeConsumeForRecipe(recipe) {
+  const need = homeRecipeNeed(recipe);
+  Object.keys(need).forEach(name => {
+    for (let k = 0; k < need[name]; k++) {
+      let idx = -1;
+      let best = Infinity;
+      state.home.fridge.forEach((f, i) => {
+        if (f.name !== name) return;
+        const e = Number(f.expireAt) || Infinity;
+        if (e < best) { best = e; idx = i; }
+      });
+      if (idx >= 0) state.home.fridge.splice(idx, 1);
+    }
+  });
+}
+function homeStartCooking(recipe) {
+  const chk = homeRecipeCheck(recipe);
+  if (!chk.ok) {
+    showToast('缺少食材：' + chk.missing.map(m => m.name).join('、'));
+    return false;
+  }
+  homeConsumeForRecipe(recipe);
+  const now = Date.now();
+  const mins = Math.max(1, Math.round(Number(recipe.time) || 1));
+  state.home.cooking.push({
+    id: uid(),
+    name: recipe.name,
+    dishEmoji: recipe.dishEmoji || '🍲',
+    startedAt: now,
+    readyAt: now + mins * 60000
+  });
+  homePushTrace('kitchen', `你系上围裙，开始做${recipe.dishEmoji}${recipe.name}`, now, 'user');
+  persist(true);
+  /* 用户点击「开始烹饪」属于有效手势，这里顺带申请通知权限 */
+  try {
+    if (notifySupported() && Notification.permission === 'default') Notification.requestPermission();
+  } catch (e) { /* 忽略 */ }
+  showToast(`开始烹饪【${recipe.name}】，${mins} 分钟后提醒你`);
+  return true;
+}
+/* 到点结算：把烹饪中的菜移到「做好的菜」，并发出系统通知（退出家园也会触发） */
+function homeSettleCooking() {
+  const h = state.home;
+  const now = Date.now();
+  const ready = h.cooking.filter(c => Number(c.readyAt) <= now);
+  if (!ready.length) return false;
+  h.cooking = h.cooking.filter(c => Number(c.readyAt) > now);
+  ready.forEach(c => {
+    h.dishes.unshift({
+      id: uid(),
+      name: c.name,
+      dishEmoji: c.dishEmoji,
+      ts: now,
+      chef: 'user',          /* 用户自己开火做的菜，制作者永远是我 */
+      by: 'user',
+      leftForTa: false,
+      leftAt: 0
+    });
+    homePushTrace('kitchen', `厨房里飘出了香味，${c.dishEmoji}${c.name}已经做好了`, now, 'system');
+    fireSystemNotification('灶台', `你做的【${c.name}】好啦！`, 'home-cook-' + c.id, { page: 'sub', name: 'homestove' });
+  });
+  persist();
+  homeRefreshIfOpen(['readtogether', 'homestove', 'homekitchen']);
+  return true;
+}
+
+/* 菜品制作者：优先读 chef，兼容只有 by 的旧数据。这是「吃」文案的唯一依据 */
+function homeDishChef(d) {
+  if (!d) return 'user';
+  if (d.chef === 'ta' || d.chef === 'user') return d.chef;
+  return d.by === 'ta' ? 'ta' : 'user';
+}
+/* 「谁做的」短语：以吃的人为视角，四种组合各自成立 */
+function homeDishMakerText(d, eater) {
+  const chef = homeDishChef(d);
+  if (eater === 'ta') return chef === 'ta' ? '自己做的' : '你做的';
+  return chef === 'ta' ? 'TA做的' : '自己做的';
+}
+
+/* ---------- TA 的家园行为 ---------- */
+/* TA 定期买食材：addedBy 标记为 ta，冰箱卡片显示「TA买的」 */
+function homeTaBuyIfDue(notify) {
+  const h = state.home;
+  const now = Date.now();
+  if (now - (Number(h.lastTaBuyAt) || 0) < HOME_TA_BUY_GAP_MS) return false;
+  h.lastTaBuyAt = now;
+  if (Math.random() > 0.72) { persist(); return false; }
+  const picked = [];
+  const count = homeRandInt(1, 3);
+  for (let i = 0; i < count; i++) {
+    const ing = homeRandPick(HOME_INGREDIENTS);
+    if (picked.some(p => p.name === ing.name)) continue;
+    picked.push(ing);
+  }
+  if (!picked.length) { persist(); return false; }
+  picked.forEach(ing => homeAddFridgeItem(ing.name, ing.emoji, ing.days, 'ta'));
+  homePushTrace('kitchen', `TA把刚买回来的${picked.map(p => p.name).join('、')}放进了冰箱`, now, 'ta');
+  persist();
+  if (notify) {
+    fireSystemNotification(taName(homeRoleId()), `往冰箱里放了${picked.map(p => p.name).join('、')}`, 'home-ta-buy', { page: 'sub', name: 'homefridge' });
+  }
+  homeRefreshIfOpen(['readtogether', 'homefridge', 'homekitchen']);
+  return true;
+}
+/* TA 概率性主动做饭：消耗冰箱里真实存在的食材，把做好的菜放到灶台 */
+function homeTaCookIfDue() {
+  const h = state.home;
+  const now = Date.now();
+  if (now - (Number(h.lastTaCookAt) || 0) < HOME_TA_COOK_GAP_MS) return false;
+  h.lastTaCookAt = now;
+  if (Math.random() > 0.5) { persist(); return false; }
+  const usable = homeAllRecipes().filter(r => homeRecipeCheck(r).ok);
+  if (!usable.length) { persist(); return false; }
+  const recipe = homeRandPick(usable);
+  homeConsumeForRecipe(recipe);
+  h.dishes.unshift({
+    id: uid(),
+    name: recipe.name,
+    dishEmoji: recipe.dishEmoji,
+    ts: now,
+    chef: 'ta',              /* TA 主动做的菜，制作者是 TA */
+    by: 'ta',
+    leftForTa: false,
+    leftAt: 0
+  });
+  homePushTrace('kitchen', `TA用冰箱里的食材做了${recipe.dishEmoji}${recipe.name}，放在了灶台上`, now, 'ta');
+  persist();
+  fireSystemNotification(taName(homeRoleId()), `用冰箱里的食材给你做了【${recipe.name}】`, 'home-ta-cook-' + now, { page: 'sub', name: 'homestove' });
+  homeRefreshIfOpen(['readtogether', 'homestove', 'homekitchen']);
+  return true;
+}
+/* 留给 TA 的菜：稍后 TA 会吃掉，并在主聊天里留下一张字卡留言 */
+function homeTaEatLeftDishes() {
+  const h = state.home;
+  const now = Date.now();
+  const roleId = homeRoleId();
+  const targets = h.dishes.filter(d => d.leftForTa && (now - (Number(d.leftAt) || Number(d.ts) || now)) >= HOME_TA_EAT_DELAY_MS);
+  if (!targets.length) return false;
+  targets.forEach(d => {
+    if (roleId && roleById(roleId)) {
+      const card = composeCardText(roleId, { key: 'home-dish:' + d.id });
+      pushDreamMessage(roleId, {
+        type: 'text',
+        text: card || `你留的${d.name}我吃完啦，很好吃。下次也做给我好不好？`
+      });
+    }
+    homePushTrace('kitchen', `TA吃掉了${homeDishMakerText(d, 'ta')}${d.dishEmoji}${d.name}，还在字卡上写了留言`, now, 'ta');
+    fireSystemNotification(taName(roleId), `吃掉了你留的【${d.name}】，还留了一张字卡`, 'home-eat-' + d.id, { page: 'chat', roleId });
+  });
+  const ids = targets.map(d => d.id);
+  h.dishes = h.dishes.filter(d => ids.indexOf(d.id) < 0);
+  persist();
+  homeRefreshIfOpen(['readtogether', 'homestove', 'homekitchen']);
+  return true;
+}
+
+/* 当前正停留在某个家园页面时，数据变化后原地刷新。
+ * 弹窗挂在 #modalRoot，与 #subBody 互不影响，因此这里无需跳过弹窗状态。 */
+function homeRefreshIfOpen(names) {
+  if (!currentRoute || currentRoute.page !== 'sub') return;
+  if (names && names.indexOf(currentRoute.name) < 0) return;
+  renderSub(currentRoute.name);
+}
+
+function homeStopCookTimer() {
+  if (homeCookTimer) {
+    clearInterval(homeCookTimer);
+    homeCookTimer = null;
+  }
+}
+function homeStartCookTimer() {
+  homeStopCookTimer();
+  if (!state || !state.home || !state.home.cooking.length) return;
+  homeCookTimer = setInterval(() => {
+    const nodes = $$('[data-cd]');
+    if (!nodes.length) { homeStopCookTimer(); return; }
+    nodes.forEach(el => {
+      const left = (Number(el.dataset.cd) || 0) - Date.now();
+      el.textContent = left > 0 ? '还剩 ' + homeFmtLeft(left) : '马上就好';
+    });
+    const due = state.home.cooking.some(c => Number(c.readyAt) <= Date.now());
+    if (due) homeSettleCooking();
+  }, 1000);
+}
+
+/* 启动时结算：跨天换装 / 生活痕迹 / TA 来访、买食材、做饭 / 到点菜品通知 */
+function homeOnBoot() {
+  if (!state || !state.home) return;
+  const h = state.home;
+  const now = Date.now();
+  homeSession.prevMe = Number(h.lastVisitMe) || 0;
+  homeSession.prevTa = Number(h.lastVisitTa) || 0;
+  homeEnsureOutfit();
+  /* 首次进入：TA 已经先买好一批食材放进冰箱 */
+  if (!h.firstBootDone) {
+    h.firstBootDone = true;
+    if (!h.fridge.length) {
+      ['番茄', '鸡蛋', '土豆', '青菜'].forEach(n => {
+        const ing = HOME_INGREDIENTS.find(i => i.name === n);
+        if (ing) homeAddFridgeItem(ing.name, ing.emoji, ing.days, 'ta', now - 2 * 3600000);
+      });
+      homePushTrace('kitchen', 'TA把刚买回来的食材一样一样放进了冰箱', now - 2 * 3600000, 'ta');
+    }
+  }
+  if (!h.lastVisitTa) {
+    h.lastVisitTa = now - homeRandInt(30, 180) * 60000;
+  } else if (now - h.lastVisitTa > 60 * 60000 && Math.random() < 0.7) {
+    h.lastVisitTa = now - homeRandInt(5, 50) * 60000;
+    if (Math.random() < 0.7) homeRandomTrace(h.lastVisitTa);
+  }
+  homeEnsureTraces();
+  homeTaBuyIfDue(false);
+  homeTaCookIfDue();
+  homeSettleCooking();
+  homeTaEatLeftDishes();
+  h.lastVisitMe = now;
+  persist();
+}
+
+/* 15 秒轮询：跨天换装 / 痕迹 / 烹饪到点 / TA 行为 */
+function homeTick() {
+  if (!state || !state.home) return;
+  const rolled = homeEnsureOutfit();
+  const traceAdded = homeEnsureTraces();
+  homeSettleCooking();
+  homeTaEatLeftDishes();
+  homeTaBuyIfDue(true);
+  homeTaCookIfDue();
+  if (rolled || traceAdded) persist();
+  if (rolled) homeRefreshIfOpen(['readtogether', 'homebedroom', 'wardrobe']);
+}
+
+/* ---------- 【家园】主页面 ---------- */
 function renderReadTogetherPage() {
-  const roleId = rdCurrentRoleId();
-  const roleName = esc(taName(roleId));
-  const listeningNow = musicIsPlaying() && musicDisplayName();
-  const listenDesc = listeningNow ? `正在听《${esc(musicDisplayName())}》 · 点击继续` : `和 ${roleName} 一起听一首歌，慢慢待在彼此身边`;
-  const focusDesc = (pomo && pomo.running)
-    ? `专注进行中 · 剩余 ${fmtDuration(pomo.remain)}`
-    : `把手机放下，和 ${roleName} 安静地专注一会儿`;
-  const body = subShell('一起做', `
-    <button class="rt-entry-card" data-rt-read>
-      <div class="ic">${APP_ICONS.readbook}</div>
-      <div class="txt">
-        <div class="t">一起读书</div>
-        <div class="d">${isReadingTogether ? '正在和 ' + esc(taName(readingRoleId)) + ' 共读中 · 点击继续' : '上传一本书，和 ' + roleName + ' 一起慢慢读'}</div>
+  const h = state.home;
+  const roleName = esc(taName(homeRoleId()));
+  const outfit = h.todayOutfit || {};
+  const outfitEmojis = WARDROBE_SLOTS.map(s => outfit[s.key]).filter(Boolean).map(x => x.emoji);
+  const cookingCount = h.cooking.length;
+  const dishCount = h.dishes.length;
+  const latest = h.traces.find(t => t.actor !== 'user');
+  const body = subShell('家园', `
+    <div class="hm-hero">
+      <div class="hm-hero-main">
+        <div class="hm-hero-ic">${HOME_ICONS.house}</div>
+        <div class="hm-hero-txt">
+          <div class="hm-hero-t">你和 ${roleName} 的小窝</div>
+          <div class="hm-hero-d">${latest ? '家里还留着：' + esc(latest.text) : '屋子很安静，等你们一起留下生活的痕迹'}</div>
+        </div>
       </div>
-      <div class="arrow">›</div>
-    </button>
-    <button class="rt-entry-card" data-rt-listen>
-      <div class="ic">${APP_ICONS.listen}</div>
-      <div class="txt">
-        <div class="t">一起听</div>
-        <div class="d">${listenDesc}</div>
+      <div class="hm-visit">
+        <div class="hm-visit-item">
+          <div class="k">TA上次来访</div>
+          <div class="v">${esc(homeAgoText(h.lastVisitTa))}</div>
+        </div>
+        <div class="hm-visit-sep"></div>
+        <div class="hm-visit-item">
+          <div class="k">我上次来访</div>
+          <div class="v">${esc(homeAgoText(homeSession.prevMe || h.lastVisitMe))}</div>
+        </div>
       </div>
-      <div class="arrow">›</div>
+    </div>
+    <button class="hm-trace-btn" data-hm-trace>
+      <span class="hm-trace-ic">${HOME_ICONS.trace}</span>
+      <span class="hm-trace-txt">查看TA的生活痕迹</span>
+      <span class="hm-trace-arrow">›</span>
     </button>
-    <button class="rt-entry-card" data-rt-focus>
-      <div class="ic">${APP_ICONS.pomodoro}</div>
-      <div class="txt">
-        <div class="t">一起专注</div>
-        <div class="d">${focusDesc}</div>
-      </div>
-      <div class="arrow">›</div>
-    </button>
-    <button class="rt-entry-card" data-rt-play>
-      <div class="ic">${APP_ICONS.games}</div>
-      <div class="txt">
-        <div class="t">一起玩</div>
-        <div class="d">五子棋 · 更多小游戏筹备中</div>
-      </div>
-      <div class="arrow">›</div>
-    </button>
-    <button class="rt-entry-card" data-rt-sleep>
-      <div class="ic">${APP_ICONS.sleep}</div>
-      <div class="txt">
-        <div class="t">一起睡觉</div>
-        <div class="d">${state.sleep && state.sleep.isSleeping ? '正在一起睡觉 · 点击查看' : '关掉灯，和 ' + roleName + ' 一起睡一会儿'}</div>
-      </div>
-      <div class="arrow">›</div>
-    </button>
-    <button class="rt-entry-card" data-rt-acts>
-      <div class="ic">${APP_ICONS.acts}</div>
-      <div class="txt">
-        <div class="t">一起演绎</div>
-        <div class="d">${state.acts && state.acts.activeActs.length ? state.acts.activeActs.length + ' 段演绎进行中 · 点击继续' : '和 ' + roleName + ' 演绎一段属于你们的剧本'}</div>
-      </div>
-      <div class="arrow">›</div>
-    </button>
-    <div class="rt-more">更多一起做功能，敬请期待…</div>
+    <div class="hm-trace-tools">
+      <button class="hm-trace-clear" data-hm-trace-clear>清空生活痕迹</button>
+    </div>
+    <div class="hm-chips">
+      <button class="hm-chip" data-hm-go="wardrobe"><span>${outfitEmojis.length ? outfitEmojis.join('') : '👗'}</span>今日穿搭 ${outfitEmojis.length} 件</button>
+      <button class="hm-chip" data-hm-go="homefridge"><span>🧊</span>冰箱 ${h.fridge.length} 份食材</button>
+      <button class="hm-chip" data-hm-go="homestove"><span>🍳</span>${cookingCount ? '烹饪中 ' + cookingCount : dishCount ? dishCount + ' 道菜等你' : '灶台空闲'}</button>
+    </div>
+    <div class="hm-rooms">
+      ${HOME_ROOMS.map(r => `
+        <button class="hm-room" data-hm-room="${r.key}">
+          <span class="hm-room-ic">${r.icon}</span>
+          <span class="hm-room-nm">${r.name}</span>
+          <span class="hm-room-ds">${r.desc}</span>
+        </button>`).join('')}
+    </div>
+    <div class="hm-foot">同居生活的每一件小事，都在慢慢变成习惯。</div>
   `);
-  const entry = $('[data-rt-read]', body);
-  if (entry) {
-    entry.addEventListener('click', () => {
-      if (isReadingTogether) openReadingRoom();
-      else navigate({ page: 'sub', name: 'reading' });
+  const traceBtn = $('[data-hm-trace]', body);
+  if (traceBtn) traceBtn.addEventListener('click', homeOpenTraceModal);
+  /* 历史脏数据一键重置：只清时间轴，不动衣柜 / 冰箱 / 灶台等其它数据 */
+  const traceClear = $('[data-hm-trace-clear]', body);
+  if (traceClear) traceClear.addEventListener('click', async () => {
+    const yes = await confirmDialog('清空生活痕迹', '确定清空全部生活痕迹吗？时间轴会被重置，衣柜、冰箱、灶台等其它数据不受影响。', '清空', true);
+    if (!yes) return;
+    state.home.traces = [];
+    state.home.lastTraceAt = Date.now();
+    persist(true);
+    showToast('生活痕迹已清空');
+    renderReadTogetherPage();
+  });
+  $$('[data-hm-room]', body).forEach(btn => {
+    btn.addEventListener('click', () => navigate({ page: 'sub', name: 'home' + btn.dataset.hmRoom }));
+  });
+  $$('[data-hm-go]', body).forEach(btn => {
+    btn.addEventListener('click', () => navigate({ page: 'sub', name: btn.dataset.hmGo }));
+  });
+}
+
+/* ---------- 四大区域 ---------- */
+function renderHomeRoomPage(roomKey) {
+  const room = HOME_ROOMS.find(r => r.key === roomKey) || HOME_ROOMS[0];
+  const roleId = homeRoleId();
+  const roleName = esc(taName(roleId));
+  const h = state.home;
+  const latest = h.traces.find(t => t.room === room.key && t.actor !== 'user');
+  let entries = [];
+  if (room.key === 'living') {
+    entries = [
+      { icon: APP_ICONS.games, title: '游戏机', desc: '五子棋 · 更多小游戏筹备中', route: 'play' },
+      { icon: APP_ICONS.listen, title: '留声机', desc: musicIsPlaying() ? `正在听《${esc(musicDisplayName())}》 · 点击继续` : `和 ${roleName} 一起听一首歌，慢慢待在彼此身边`, route: 'listen' }
+    ];
+  } else if (room.key === 'bedroom') {
+    entries = [
+      { icon: APP_ICONS.sleep, title: '双人床', desc: state.sleep && state.sleep.isSleeping ? '正在一起睡觉 · 点击查看' : `关掉灯，和 ${roleName} 一起睡一会儿`, route: 'sleep' },
+      { icon: HOME_ICONS.wardrobe, title: '衣柜', desc: homeWardrobeDesc(), route: 'wardrobe' }
+    ];
+  } else if (room.key === 'study') {
+    entries = [
+      { icon: APP_ICONS.readbook, title: '书架', desc: isReadingTogether ? `正在和 ${esc(taName(readingRoleId))} 共读中 · 点击继续` : `上传一本书，和 ${roleName} 一起慢慢读`, route: 'reading' },
+      { icon: APP_ICONS.acts, title: '小剧场', desc: (state.acts && state.acts.activeActs.length) ? state.acts.activeActs.length + ' 段演绎进行中 · 点击继续' : `和 ${roleName} 演绎一段属于你们的剧本`, route: 'acts' },
+      { icon: APP_ICONS.pomodoro, title: '书桌', desc: (pomo && pomo.running) ? `专注进行中 · 剩余 ${fmtDuration(pomo.remain)}` : `把手机放下，和 ${roleName} 安静地专注一会儿`, route: 'pomodoro' }
+    ];
+  } else {
+    entries = [
+      { icon: HOME_ICONS.fridge, title: '冰箱', desc: h.fridge.length ? `${h.fridge.length} 份食材 · ${homeFridgeHint()}` : '冰箱空空的，去添点食材吧', route: 'homefridge' },
+      { icon: HOME_ICONS.stove, title: '灶台', desc: h.cooking.length ? `${h.cooking.length} 道菜正在烹饪 · 点击查看` : (h.dishes.length ? `${h.dishes.length} 道菜等你处理` : '食材齐全时，做一道菜给 TA 吧'), route: 'homestove' }
+    ];
+  }
+  const body = subShell(room.name, `
+    <div class="hm-room-hero">
+      <div class="ic">${room.icon}</div>
+      <div class="txt">
+        <div class="t">${room.name}</div>
+        <div class="d">${latest ? '最近：' + esc(latest.text) : '这里还很安静，等你们留下一点动静'}</div>
+      </div>
+    </div>
+    ${entries.map((e, i) => `
+      <button class="rt-entry-card" data-hm-entry="${i}">
+        <div class="ic">${e.icon}</div>
+        <div class="txt">
+          <div class="t">${e.title}</div>
+          <div class="d">${e.desc}</div>
+        </div>
+        <div class="arrow">›</div>
+      </button>`).join('')}
+  `);
+  $$('[data-hm-entry]', body).forEach(btn => {
+    const e = entries[Number(btn.dataset.hmEntry)];
+    if (!e) return;
+    btn.addEventListener('click', () => {
+      if (e.route === 'reading' && isReadingTogether) { openReadingRoom(); return; }
+      navigate({ page: 'sub', name: e.route });
+    });
+  });
+}
+
+/* ---------- 卧室·衣柜 ---------- */
+function renderWardrobePage() {
+  const h = state.home;
+  homeEnsureOutfit();
+  const roleName = esc(taName(homeRoleId()));
+  const outfit = h.todayOutfit || {};
+  const slotsHTML = WARDROBE_SLOTS.map(s => {
+    const it = outfit[s.key];
+    const optional = homeSlotIsOptional(s.key);
+    const emptyTxt = optional ? '未佩戴' : '未搭配';
+    return `<div class="wd-slot${optional ? ' opt' : ''}">
+      <div class="k">${s.label}</div>
+      <div class="v">${it ? `<span class="e">${esc(it.emoji)}</span><span class="n">${esc(it.name)}</span>` : `<span class="empty${optional ? ' opt' : ''}">${emptyTxt}</span>`}</div>
+    </div>`;
+  }).join('');
+  const groups = WARDROBE_SLOTS.map(s => {
+    const list = h.clothes.filter(c => c.cat === s.key);
+    return `<div class="wd-group">
+      <div class="wd-group-hd">${s.label}<span class="cnt">${list.length}</span></div>
+      ${list.length ? `<div class="wd-grid">${list.map(c => `
+        <div class="wd-cloth">
+          <span class="e">${esc(c.emoji)}</span>
+          <span class="n">${esc(c.name)}</span>
+          <button class="wd-del" data-wd-del="${c.id}" aria-label="删除">✕</button>
+        </div>`).join('')}</div>` : '<div class="wd-empty">这一类还没有衣服</div>'}
+    </div>`;
+  }).join('');
+  const next = h.nextOutfit;
+  const nextTxt = next
+    ? WARDROBE_SLOTS.filter(s => next[s.key]).map(s => next[s.key].emoji + next[s.key].name).join(' · ')
+    : '';
+  const body = subShell('衣柜', `
+    <div class="hm-card">
+      <div class="hm-card-hd">
+        <div class="t">${roleName} 今日穿搭</div>
+        <div class="s">${h.outfitDate === statusDateKey() ? '今天' : ''}</div>
+      </div>
+      <div class="wd-outfit">${slotsHTML}</div>
+      <div class="wd-plan">
+        <div class="wd-plan-txt">${next ? '明天已安排：' + esc(nextTxt) : '还没为 TA 搭配明天，跨天后会自动随机一套'}</div>
+        <button class="hm-primary-btn" data-wd-plan>为 TA 搭配明天</button>
+      </div>
+    </div>
+    <div class="hm-card">
+      <div class="hm-card-hd">
+        <div class="t">衣柜衣服</div>
+        <button class="hm-mini-btn" data-wd-add>+ 添加衣服</button>
+      </div>
+      ${groups}
+    </div>
+  `);
+  const planBtn = $('[data-wd-plan]', body);
+  if (planBtn) planBtn.addEventListener('click', homeOpenPlanOutfit);
+  const addBtn = $('[data-wd-add]', body);
+  if (addBtn) addBtn.addEventListener('click', homeOpenAddCloth);
+  $$('[data-wd-del]', body).forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const cloth = state.home.clothes.find(c => c.id === btn.dataset.wdDel);
+      if (!cloth) return;
+      const ok = await confirmDialog('删除衣服', `确定从衣柜里删掉【${cloth.name}】吗？`, '删除', true);
+      if (!ok) return;
+      state.home.clothes = state.home.clothes.filter(c => c.id !== cloth.id);
+      persist(true);
+      renderWardrobePage();
+    });
+  });
+}
+
+/* 搭配明天：五个部位各选一件（头饰 / 小饰品可不选），保存后写入 nextOutfit，跨天自动穿上 */
+function homeOpenPlanOutfit() {
+  const draft = homeNormOutfit(state.home.nextOutfit || state.home.todayOutfit);
+  const modal = showModal({
+    title: '搭配明天的衣服',
+    wide: true,
+    body: `
+      <p class="modal-text">为 ${esc(taName(homeRoleId()))} 搭配明天要穿的衣服，跨天后自动换上。</p>
+      ${WARDROBE_SLOTS.map(s => {
+        const list = state.home.clothes.filter(c => c.cat === s.key);
+        const optional = homeSlotIsOptional(s.key);
+        return `<div class="wd-pick-row" data-slot="${s.key}">
+          <div class="wd-pick-k">${s.label}${optional ? '<span class="opt">可选</span>' : ''}</div>
+          <div class="wd-pick-list">
+            ${list.length ? list.map(c => `<button class="wd-pick ${draft[s.key] && draft[s.key].name === c.name ? 'sel' : ''}" data-wd-pick="${s.key}:${c.id}"><span>${esc(c.emoji)}</span>${esc(c.name)}</button>`).join('') : '<span class="wd-empty">暂无衣服</span>'}
+          </div>
+        </div>`;
+      }).join('')}
+    `,
+    actions: [
+      { label: '取消' },
+      { label: '保存搭配', kind: 'primary', onClick: () => {
+        state.home.nextOutfit = draft;
+        persist(true);
+        showToast('已为 TA 搭配好明天的衣服');
+        homeRefreshIfOpen(['wardrobe', 'homebedroom', 'readtogether']);
+      } }
+    ]
+  });
+  $$('[data-wd-pick]', modal.el).forEach(btn => {
+    btn.addEventListener('click', () => {
+      const parts = btn.dataset.wdPick.split(':');
+      const slot = parts[0];
+      const cloth = state.home.clothes.find(c => c.id === parts[1]);
+      if (!cloth) return;
+      const cur = draft[slot];
+      draft[slot] = (cur && cur.name === cloth.name) ? null : { name: cloth.name, emoji: cloth.emoji };
+      $$('[data-wd-pick^="' + slot + ':"]', modal.el).forEach(b => {
+        b.classList.toggle('sel', b === btn && !!draft[slot]);
+      });
+    });
+  });
+}
+
+function homeOpenAddCloth() {
+  const modal = showModal({
+    title: '添加衣服',
+    body: `
+      <div class="field"><label>类别</label>
+        <select class="input" id="wdAddCat">${WARDROBE_SLOTS.map(s => `<option value="${s.key}">${s.label}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>名称</label><input class="input" id="wdAddName" maxlength="20" placeholder="例如：米色卫衣"></div>
+      <div class="field"><label>Emoji</label><input class="input" id="wdAddEmoji" maxlength="4" placeholder="例如：👕"></div>
+    `,
+    actions: [
+      { label: '取消' },
+      { label: '保存', kind: 'primary', onClick: () => {
+        const cat = $('#wdAddCat', modal.el).value;
+        const name = $('#wdAddName', modal.el).value.trim();
+        const emoji = $('#wdAddEmoji', modal.el).value.trim() || '👕';
+        if (!name) { showToast('请填写衣服名称'); return false; }
+        state.home.clothes.push({ id: uid(), cat, name: name.slice(0, 20), emoji: emoji.slice(0, 4) });
+        persist(true);
+        showToast('已放进衣柜');
+        homeRefreshIfOpen(['wardrobe']);
+      } }
+    ]
+  });
+}
+
+/* ---------- 厨房·冰箱 ---------- */
+function renderHomeFridgePage() {
+  const removed = homeCleanFridge();
+  if (removed) {
+    persist(true);
+    showToast(`自动清理了 ${removed} 份过期食材`);
+  }
+  const h = state.home;
+  const list = h.fridge.slice().sort((a, b) => (Number(a.expireAt) || 0) - (Number(b.expireAt) || 0));
+  const body = subShell('冰箱', `
+    <div class="hk-fridge-top">
+      <div class="t">${list.length} 份食材</div>
+      <button class="hm-mini-btn" data-fridge-add>+ 添加食材</button>
+    </div>
+    ${list.length ? `<div class="hk-ing-grid">
+      ${list.map(f => {
+        const left = homeFridgeDaysLeft(f);
+        const expTxt = left < 0 ? '已过期' : left === 0 ? '今天到期' : '剩 ' + left + ' 天';
+        return `<div class="hk-ing">
+          <div class="e">${esc(f.emoji)}</div>
+          <div class="n">${esc(f.name)}</div>
+          <div class="exp ${left <= 1 ? 'soon' : ''}">${expTxt}</div>
+          <span class="hk-src ${f.addedBy === 'ta' ? 'ta' : 'me'}">${f.addedBy === 'ta' ? 'TA买的' : '我买的'}</span>
+          <button class="hk-ing-del" data-fridge-del="${f.id}" aria-label="删除食材">✕</button>
+        </div>`;
+      }).join('')}
+    </div>` : `<div class="hm-empty">
+      <div class="e">🧊</div>
+      <div class="t">冰箱空空如也</div>
+      <div class="d">TA 偶尔会买食材回来，你也可以自己添一些。</div>
+    </div>`}
+    <div class="hm-note">每次打开冰箱都会自动清理过期食材；标签会标明是「TA买的」还是「我买的」。</div>
+  `);
+  const addBtn = $('[data-fridge-add]', body);
+  if (addBtn) addBtn.addEventListener('click', homeOpenAddIngredient);
+  $$('[data-fridge-del]', body).forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const item = state.home.fridge.find(f => f.id === btn.dataset.fridgeDel);
+      if (!item) return;
+      const ok = await confirmDialog('删除食材', `确定把【${item.name}】从冰箱里拿出来吗？`, '删除', true);
+      if (!ok) return;
+      state.home.fridge = state.home.fridge.filter(f => f.id !== item.id);
+      persist(true);
+      renderHomeFridgePage();
+    });
+  });
+}
+
+function homeOpenAddIngredient() {
+  const modal = showModal({
+    title: '添加食材',
+    body: `
+      <div class="field"><label>食材名称</label><input class="input" id="hkAddName" maxlength="20" placeholder="例如：番茄"></div>
+      <div class="field"><label>食材 Emoji</label><input class="input" id="hkAddEmoji" maxlength="4" placeholder="例如：🍅"></div>
+      <div class="field"><label>保质期（天）</label><input class="input" id="hkAddDays" type="number" min="1" max="365" value="7"></div>
+    `,
+    actions: [
+      { label: '取消' },
+      { label: '放入冰箱', kind: 'primary', onClick: () => {
+        const name = $('#hkAddName', modal.el).value.trim();
+        const emoji = $('#hkAddEmoji', modal.el).value.trim() || '🥡';
+        const days = clamp(Math.round(Number($('#hkAddDays', modal.el).value) || 7), 1, 365);
+        if (!name) { showToast('请填写食材名称'); return false; }
+        homeAddFridgeItem(name, emoji, days, 'user');
+        persist(true);
+        showToast(`已把【${name}】放进冰箱`);
+        homeRefreshIfOpen(['homefridge', 'homekitchen', 'readtogether']);
+      } }
+    ]
+  });
+}
+
+/* ---------- 厨房·灶台 ---------- */
+function renderHomeStovePage() {
+  const h = state.home;
+  const now = Date.now();
+  const cookingHTML = h.cooking.length ? `
+    <div class="hm-card">
+      <div class="hm-card-hd"><div class="t">灶台上</div><div class="s">${h.cooking.length} 道</div></div>
+      ${h.cooking.map(c => `<div class="hk-cook">
+        <span class="de">${esc(c.dishEmoji)}</span>
+        <div class="info">
+          <div class="nm">${esc(c.name)}</div>
+          <div class="cd" data-cd="${c.readyAt}">还剩 ${homeFmtLeft(c.readyAt - now)}</div>
+        </div>
+      </div>`).join('')}
+    </div>` : '';
+  const dishesHTML = h.dishes.length ? `
+    <div class="hm-card">
+      <div class="hm-card-hd"><div class="t">做好的菜</div><div class="s">${h.dishes.length} 道</div></div>
+      ${h.dishes.map(d => `
+        <div class="hk-dish">
+          <span class="de">${esc(d.dishEmoji)}</span>
+          <div class="info">
+            <div class="nm">${esc(d.name)}</div>
+            <div class="by">${homeDishChef(d) === 'ta' ? 'TA 做的' : '你做的'}${d.leftForTa ? ' · 已留给 TA' : ''}</div>
+          </div>
+          <div class="acts">
+            ${d.leftForTa ? '<span class="left-tag">等 TA 回来</span>' : `<button class="hm-mini-btn" data-dish-leave="${d.id}">留给TA</button>`}
+            <button class="hm-primary-btn small" data-dish-eat="${d.id}">立即享用</button>
+          </div>
+        </div>`).join('')}
+    </div>` : '';
+  const recipesHTML = homeAllRecipes().map(r => {
+    const chk = homeRecipeCheck(r);
+    const ings = r.ingredients.map(ing => {
+      const n = chk.need[ing.name] || 1;
+      const have = state.home.fridge.filter(f => f.name === ing.name).length;
+      return `<span class="hk-ing-tag ${have >= n ? '' : 'miss'}">${esc(ing.emoji)}${esc(ing.name)}${n > 1 ? ' ×' + n : ''}</span>`;
+    }).join('');
+    return `<div class="hk-recipe ${chk.ok ? '' : 'lack'}">
+      <div class="hd">
+        <span class="de">${esc(r.dishEmoji)}</span>
+        <span class="nm">${esc(r.name)}</span>
+        <span class="tm">${r.time} 分钟</span>
+        ${r.custom ? `<button class="hk-rc-del" data-rc-del="${r.id}" aria-label="删除食谱">✕</button>` : ''}
+      </div>
+      <div class="ings">${ings}</div>
+      <div class="ft">
+        <span class="hint">${chk.ok ? '食材齐全' : '缺少：' + esc(chk.missing.map(m => m.name).join('、'))}</span>
+        <button class="hm-primary-btn small" data-cook="${r.id}" ${chk.ok ? '' : 'disabled'}>开始烹饪</button>
+      </div>
+    </div>`;
+  }).join('');
+  const body = subShell('灶台', `
+    ${cookingHTML}
+    ${dishesHTML}
+    <div class="hm-card">
+      <div class="hm-card-hd">
+        <div class="t">食谱</div>
+        <button class="hm-mini-btn" data-rc-add>+ 添加食谱</button>
+      </div>
+      ${recipesHTML}
+    </div>
+    <div class="hm-note">做出菜后可以立即享用，或留给 TA；TA 也会偶尔用冰箱里的食材给你做饭。</div>
+  `);
+  const rcAdd = $('[data-rc-add]', body);
+  if (rcAdd) rcAdd.addEventListener('click', homeOpenAddRecipe);
+  $$('[data-cook]', body).forEach(btn => {
+    btn.addEventListener('click', () => {
+      const r = homeRecipeById(btn.dataset.cook);
+      if (!r) return;
+      if (homeStartCooking(r)) renderHomeStovePage();
+    });
+  });
+  $$('[data-dish-eat]', body).forEach(btn => {
+    btn.addEventListener('click', () => {
+      const d = state.home.dishes.find(x => x.id === btn.dataset.dishEat);
+      if (!d) return;
+      state.home.dishes = state.home.dishes.filter(x => x.id !== d.id);
+      homePushTrace('kitchen', `你吃掉了${homeDishMakerText(d, 'user')}${d.dishEmoji}${d.name}`, undefined, 'user');
+      persist(true);
+      showToast(`吃掉了【${d.name}】`);
+      renderHomeStovePage();
+    });
+  });
+  $$('[data-dish-leave]', body).forEach(btn => {
+    btn.addEventListener('click', () => {
+      const d = state.home.dishes.find(x => x.id === btn.dataset.dishLeave);
+      if (!d) return;
+      d.leftForTa = true;
+      d.leftAt = Date.now();
+      persist(true);
+      showToast(`把【${d.name}】留给了 TA，TA 今天会吃掉`);
+      renderHomeStovePage();
+    });
+  });
+  $$('[data-rc-del]', body).forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const r = state.home.recipes.find(x => x.id === btn.dataset.rcDel);
+      if (!r) return;
+      const ok = await confirmDialog('删除食谱', `确定删除自定义食谱【${r.name}】吗？`, '删除', true);
+      if (!ok) return;
+      state.home.recipes = state.home.recipes.filter(x => x.id !== r.id);
+      persist(true);
+      renderHomeStovePage();
+    });
+  });
+  homeStartCookTimer();
+}
+
+/* 添加食谱：菜品名称 / 菜品 Emoji / 烹饪时间 + 动态食材行（名称 + Emoji，支持 +/-） */
+function homeOpenAddRecipe() {
+  const rowHTML = (name, emoji) => `
+    <div class="hk-rc-row">
+      <input class="input hk-ing-name" maxlength="20" placeholder="食材名称" value="${esc(name || '')}">
+      <input class="input hk-ing-emoji" maxlength="4" placeholder="🍅" value="${esc(emoji || '')}">
+      <button class="hk-rc-row-btn" data-row-del type="button">−</button>
+      <button class="hk-rc-row-btn" data-row-add type="button">+</button>
+    </div>`;
+  const modal = showModal({
+    title: '添加食谱',
+    wide: true,
+    body: `
+      <div class="field"><label>菜品名称</label><input class="input" id="hkRcName" maxlength="20" placeholder="例如：番茄炒蛋"></div>
+      <div class="field"><label>菜品 Emoji</label><input class="input" id="hkRcEmoji" maxlength="4" placeholder="例如：🍳"></div>
+      <div class="field"><label>烹饪时间（分钟）</label><input class="input" id="hkRcTime" type="number" min="1" max="180" value="5"></div>
+      <div class="field">
+        <label>所需食材</label>
+        <div class="hk-rc-rows" id="hkRcRows">${rowHTML('', '')}</div>
+      </div>
+    `,
+    actions: [
+      { label: '取消' },
+      { label: '保存食谱', kind: 'primary', onClick: () => {
+        const name = $('#hkRcName', modal.el).value.trim();
+        const dishEmoji = $('#hkRcEmoji', modal.el).value.trim() || '🍲';
+        const time = clamp(Math.round(Number($('#hkRcTime', modal.el).value) || 5), 1, 180);
+        if (!name) { showToast('请填写菜品名称'); return false; }
+        const ingredients = $$('.hk-rc-row', modal.el).map(row => {
+          const n = $('.hk-ing-name', row).value.trim();
+          const e = $('.hk-ing-emoji', row).value.trim() || '🥄';
+          return n ? { name: n.slice(0, 20), emoji: e.slice(0, 4) } : null;
+        }).filter(Boolean);
+        if (!ingredients.length) { showToast('至少添加一种食材'); return false; }
+        state.home.recipes.push({
+          id: 'rc-' + uid(),
+          name: name.slice(0, 20),
+          dishEmoji: dishEmoji.slice(0, 4),
+          ingredients,
+          time,
+          custom: true
+        });
+        persist(true);
+        showToast(`食谱【${name}】已加入灶台`);
+        homeRefreshIfOpen(['homestove']);
+      } }
+    ]
+  });
+  const rows = $('#hkRcRows', modal.el);
+  if (rows) {
+    rows.addEventListener('click', e => {
+      if (e.target.closest('[data-row-add]')) {
+        rows.insertAdjacentHTML('beforeend', rowHTML('', ''));
+        return;
+      }
+      if (e.target.closest('[data-row-del]')) {
+        if ($$('.hk-rc-row', rows).length <= 1) { showToast('至少保留一行食材'); return; }
+        const row = e.target.closest('.hk-rc-row');
+        if (row) row.remove();
+      }
     });
   }
-  const listenEntry = $('[data-rt-listen]', body);
-  if (listenEntry) listenEntry.addEventListener('click', () => navigate({ page: 'sub', name: 'listen' }));
-  const focusEntry = $('[data-rt-focus]', body);
-  if (focusEntry) focusEntry.addEventListener('click', () => navigate({ page: 'sub', name: 'pomodoro' }));
-  /* 一起玩：进入二级子页面（三级结构：一起做 → 一起玩 → 五子棋） */
-  const playEntry = $('[data-rt-play]', body);
-  if (playEntry) playEntry.addEventListener('click', () => navigate({ page: 'sub', name: 'play' }));
-  /* 一起睡觉：进入睡眠主页（开始睡觉 + 历史记录） */
-  const sleepEntry = $('[data-rt-sleep]', body);
-  if (sleepEntry) sleepEntry.addEventListener('click', () => navigate({ page: 'sub', name: 'sleep' }));
-  /* 一起演绎：进入演绎主界面（分类情景 + 存档管理） */
-  const actsEntry = $('[data-rt-acts]', body);
-  if (actsEntry) actsEntry.addEventListener('click', () => navigate({ page: 'sub', name: 'acts' }));
+}
+
+/* ---------- TA 的生活痕迹时间轴 ---------- */
+/* 默认只展示 TA 的主动行为与系统旁白；用户自己的操作需要切到「全部（含我）」才会出现 */
+const HOME_TRACE_FILTERS = {
+  ta: t => t.actor === 'ta' || t.actor === 'system',
+  all: () => true
+};
+function homeTraceWhoBadge(actor) {
+  if (actor === 'user') return '<span class="who me">我</span>';
+  if (actor === 'system') return '<span class="who sys">旁白</span>';
+  return '<span class="who ta">TA</span>';
+}
+function homeTraceListHTML(mode) {
+  const pass = HOME_TRACE_FILTERS[mode] || HOME_TRACE_FILTERS.ta;
+  const traces = state.home.traces.filter(pass).slice().sort((a, b) => b.ts - a.ts);
+  if (!traces.length) {
+    return `<div class="hm-empty">
+      <div class="e">🕰️</div>
+      <div class="t">还没有生活痕迹</div>
+      <div class="d">过一段时间再来看看，TA 会在这里留下一点动静。</div>
+    </div>`;
+  }
+  return `<div class="hm-tl">${traces.map(t => `
+    <div class="hm-tl-item ${t.actor === 'user' ? 'is-user' : (t.actor === 'system' ? 'is-sys' : 'is-ta')}">
+      <div class="dot"></div>
+      <div class="body">
+        <div class="meta">${homeTraceWhoBadge(t.actor)}<span class="room">${HOME_TRACE_ROOMS[t.room] || '家里'}</span><span class="time">${homeTraceTime(t.ts)}</span></div>
+        <div class="txt">${esc(t.text)}</div>
+      </div>
+    </div>`).join('')}</div>`;
+}
+function homeOpenTraceModal() {
+  const modal = showModal({
+    title: 'TA 的生活痕迹',
+    wide: true,
+    body: `
+      <div class="hm-tl-tabs">
+        <button class="hm-tl-tab active" data-tl-mode="ta">TA 的痕迹</button>
+        <button class="hm-tl-tab" data-tl-mode="all">全部（含我）</button>
+      </div>
+      <div id="hmTlList">${homeTraceListHTML('ta')}</div>
+      <div class="hm-note">这里只记录 TA 的动静和旁白；你自己做过的事不会混进来，切到「全部（含我）」才会显示，并带【我】角标。</div>
+    `
+  });
+  $$('[data-tl-mode]', modal.el).forEach(btn => {
+    btn.addEventListener('click', () => {
+      $$('[data-tl-mode]', modal.el).forEach(b => b.classList.toggle('active', b === btn));
+      const list = $('#hmTlList', modal.el);
+      if (list) list.innerHTML = homeTraceListHTML(btn.dataset.tlMode);
+    });
+  });
 }
 
 /* =========================================================
@@ -18573,8 +19769,15 @@ function sleepBuildRecord(startTime, endTime) {
     startTime: start,
     endTime: end,
     duration: span,
+    /* 本次睡眠类型：夜眠 / 午睡，随记录一起持久化 */
+    sleepType: sleepCurrentType(),
     timeline
   };
+}
+
+/* 当前睡眠类型：nap=午睡，其余一律 night=夜眠 */
+function sleepCurrentType() {
+  return (state.sleep && state.sleep.currentType === 'nap') ? 'nap' : 'night';
 }
 
 /* ---------------- 全屏睡眠遮罩 ---------------- */
@@ -18697,7 +19900,7 @@ function openSleepTimeline(rec, isHistory) {
     <div class="sl-tl-card">
       <div class="sl-tl-head">
         <div class="sl-tl-title">TA 的睡眠记录</div>
-        <div class="sl-tl-sub">${esc(sleepDayLabel(rec.startTime))} · ${esc(fmtClock(rec.startTime))} - ${esc(fmtClock(rec.endTime))} · ${esc(sleepDurationText(rec.duration))}</div>
+        <div class="sl-tl-sub">${rec.sleepType === 'nap' ? '午睡' : '夜眠'} · ${esc(sleepDayLabel(rec.startTime))} · ${esc(fmtClock(rec.startTime))} - ${esc(fmtClock(rec.endTime))} · ${esc(sleepDurationText(rec.duration))}</div>
       </div>
       <div class="sl-timeline${items ? '' : ' is-calm'}">${items || `
         <div class="sl-calm">
@@ -18731,9 +19934,11 @@ function sleepSaveRecord(rec) {
 }
 
 /* ---------------- 开始睡觉 / 我醒了 ---------------- */
-function startSleep() {
+/* type：'night'=夜眠 / 'nap'=午睡；手动按钮与定时强制睡眠都会传入 */
+function startSleep(type) {
   const sl = state.sleep;
   if (sl.isSleeping) { showSleepOverlay(); return; }
+  sl.currentType = type === 'nap' ? 'nap' : 'night';
   sl.startTime = Date.now();
   sl.isSleeping = true;
   sl.pendingSummary = false;
@@ -18884,7 +20089,8 @@ function checkOneSleepSchedule(cfg) {
   state[cfg.lastKey] = today;
   persist(true);
   if (document.visibilityState === 'visible') {
-    startSleep();                                     /* 情况 A：前台，直接强制入睡 */
+    /* 情况 A：前台，直接强制入睡；夜间定时=夜眠，午睡定时=午睡 */
+    startSleep(cfg.kind === 'noon' ? 'nap' : 'night');
   } else {
     sleepAutoPending = { targetMs, kind: cfg.kind };  /* 情况 B：后台，通知 + 回前台校验补弹 */
     showSleepAutoNotification(cfg.kind, targetMs);
@@ -18899,7 +20105,7 @@ function checkSleepSchedules() {
     const p = sleepAutoPending;
     sleepAutoPending = null;
     if (!sleeping && Math.abs(Date.now() - (Number(p.targetMs) || 0)) <= SLEEP_SCHEDULE_WINDOW_MS) {
-      startSleep();
+      startSleep(p.kind === 'noon' ? 'nap' : 'night');
       return;
     }
   }
@@ -18933,7 +20139,12 @@ function renderSleepPage() {
         <div class="sl-hero-icon">${APP_ICONS.sleep}</div>
         <div class="sl-hero-title">${sleeping ? '你们正在一起睡觉…' : '和 ' + roleName + ' 一起睡一会儿'}</div>
         <div class="sl-hero-desc">${sleeping ? '已经睡了 ' + sleepElapsedMinutes() + ' 分钟' : '关掉灯，靠着彼此慢慢睡着'}</div>
-        <button class="sl-primary sl-start-btn" data-sl-start type="button"${sleeping ? ' disabled' : ''}>${sleeping ? '正在睡觉中…' : '开始睡觉'}</button>
+        ${sleeping
+          ? '<button class="sl-primary sl-start-btn" data-sl-start type="button" disabled>正在睡觉中…</button>'
+          : `<div class="sl-start-row">
+              <button class="sl-primary sl-start-btn" data-sl-start="night" type="button">🌙 开始夜眠</button>
+              <button class="sl-primary sl-start-btn sl-nap-btn" data-sl-start="nap" type="button">☀️ 开始午睡</button>
+            </div>`}
       </div>
       <div class="sl-hist-head">定时强制睡眠</div>
       <div class="sl-set">
@@ -18959,11 +20170,12 @@ function renderSleepPage() {
       <div class="sl-hist-head">历史睡眠记录</div>
       ${hist.length ? `<div class="sl-hist">${hist.map(r => {
         const feel = (r.feeling || '').trim();
+        const isNap = r.sleepType === 'nap';
         return `
         <div class="sl-hist-item" data-sl-hist="${esc(r.id)}">
           <div class="sl-hist-ic">${APP_ICONS.sleep}</div>
           <div class="sl-hist-main">
-            <div class="sl-hist-date">${esc(sleepDayLabel(r.startTime))}</div>
+            <div class="sl-hist-date">${esc(sleepDayLabel(r.startTime))}<span class="sl-tag ${isNap ? 'nap' : ''}">${isNap ? '午睡' : '夜眠'}</span></div>
             <div class="sl-hist-dur">${esc(fmtClock(r.startTime))} - ${esc(fmtClock(r.endTime))} · ${esc(sleepDurationText(r.duration))}</div>
             ${feel ? `<div class="sl-hist-feel-wrap"><div class="sl-hist-feel">${esc(feel)}</div><button class="sl-feel-del" data-sl-feel-del="${esc(r.id)}" type="button" aria-label="删除感受"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></button></div>` : ''}
           </div>
@@ -18978,8 +20190,10 @@ function renderSleepPage() {
   `);
   /* 防御：subShell 万一没返回容器（极端情况），也不抛出 null 属性访问错误 */
   if (body) {
-    const startBtn = $('[data-sl-start]', body);
-    if (startBtn) startBtn.addEventListener('click', () => startSleep());
+    $$('[data-sl-start]', body).forEach(b => b.addEventListener('click', () => {
+      if (b.disabled) return;
+      startSleep(b.dataset.slStart === 'nap' ? 'nap' : 'night');
+    }));
     $$('[data-sl-hist]', body).forEach(b => b.addEventListener('click', () => {
       const rec = (state.sleep.history || []).find(x => x.id === b.dataset.slHist);
       if (rec) openSleepTimeline(rec, true);
@@ -20548,6 +21762,8 @@ async function boot() {
   /* 一起睡觉：刷新前正在睡 → 直接回到全屏遮罩；刷新前刚醒未看结算 → 直接回到结算卡。
      用 try-catch 兜住：睡眠功能出现任何异常都不允许阻塞首屏（Loading 必须照常关闭） */
   try { sleepRestoreOnBoot(); } catch (e) { console.warn('[sleep] 恢复状态失败，已跳过：', e); }
+  /* 家园：跨天换装 / 生活痕迹 / TA 来访与冰箱、灶台行为 / 到点菜品通知 */
+  try { homeOnBoot(); } catch (e) { console.warn('[home] 初始化失败，已跳过：', e); }
   /* 每日初见信件：boot 完成、桌面已渲染后再判定，避免被开屏动画或睡眠遮罩打断 */
   try { maybeShowDailyLetter(); } catch (e) { console.warn('[daily-letter] 初始化失败，已跳过：', e); }
   /* 24h 退回检查：延迟到 UI 渲染与全部事件绑定完成之后执行，绝不阻塞基础交互 */
@@ -20566,6 +21782,7 @@ async function boot() {
     checkTodoReminders();
     try { checkExpiredTransactions(); } catch (e) { /* 容错：单次异常不影响后续轮询与其它任务 */ }
     try { checkSleepSchedules(); } catch (e) { /* 容错 */ }
+    try { homeTick(); } catch (e) { /* 家园：轮询换装 / 烹饪到点 / TA 行为，单次异常不影响后续 */ }
   }, 15000);
 
   /* 刷新后若保活开关为开启：浏览器通常会在无手势时拦截播放，
@@ -20583,6 +21800,7 @@ async function boot() {
       checkLetterReplies(); /* 切后台期间到期的回信 */
       checkAutoLetters();   /* 时间戳已过期则立刻补发主动来信 */
       try { checkSleepSchedules(); } catch (e) { /* 切后台期间可能刚好过了定时点，回前台补查并补弹遮罩 */ }
+      try { homeTick(); } catch (e) { /* 家园：切后台期间到点的菜，回前台立即结算并通知 */ }
       /* 全部补查完成后再结算离线事件：这样补发出来的 TA 消息也会被计入横幅 */
       checkOfflineEvents();
     }

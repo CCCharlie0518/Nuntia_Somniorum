@@ -667,6 +667,12 @@ input[type="time"],
 .switch input:checked + .slider::before{transform:translateX(17px);}
 
 /* ===================== 表情包管理 ===================== */
+/* 我的 / TA 的双 Tab：分段控件风格，当前项主题色 */
+.stk-tabs{display:flex;gap:4px;background:#fff;border-radius:12px;padding:4px;margin-bottom:12px;box-shadow:var(--shadow);}
+.stk-tab{flex:1;text-align:center;font-size:13px;font-weight:600;color:#8b909a;padding:8px 0;border-radius:9px;transition:background .15s,color .15s;}
+.stk-tab .n{font-size:11px;font-weight:500;opacity:.7;margin-left:3px;}
+.stk-tab.active{background:var(--primary-soft);color:var(--primary);}
+.stk-tab.active .n{opacity:1;}
 .sticker-manage-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
 .sticker-card{background:#fff;border-radius:11px;padding:8px;box-shadow:var(--shadow);position:relative;}
 .sticker-card .thumb{
@@ -4107,6 +4113,14 @@ body.voice-recording *{
 .sl-hero-title{font-size:17px;font-weight:600;margin-top:12px;color:#2a3040;}
 .sl-hero-desc{font-size:12.5px;color:#8b909a;margin-top:5px;line-height:1.5;}
 .sl-start-btn{margin-top:16px;max-width:230px;}
+/* 夜眠 / 午睡 双按钮并排：夜眠主色，午睡浅橙辅助色 */
+.sl-start-row{display:flex;gap:10px;margin-top:16px;width:100%;max-width:300px;}
+.sl-start-row .sl-start-btn{margin-top:0;max-width:none;flex:1;font-size:14px;padding:11px 0;}
+.sl-nap-btn{background:#fff3e4;color:#e8891c;box-shadow:none;}
+.sl-nap-btn:active{background:#ffe7cd;}
+/* 历史记录里的睡眠类型小标签 */
+.sl-tag{display:inline-block;font-size:10px;font-weight:600;line-height:1.5;padding:1px 6px;border-radius:8px;margin-left:6px;vertical-align:middle;background:rgba(18,183,245,.12);color:#0a9bd4;}
+.sl-tag.nap{background:#fff3e4;color:#e8891c;}
 .sl-hist-head{font-size:12px;color:#9aa0aa;letter-spacing:.6px;padding:4px 2px 0;}
 /* 定时睡眠设置区（极简卡，与一起睡觉主页的视觉统一） */
 .sl-set{background:#fff;border-radius:14px;padding:12px 14px 14px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:10px;}
@@ -4414,6 +4428,262 @@ body.voice-recording *{
 .act-cat-add-btn{flex-shrink:0;background:var(--primary);color:#fff;border-radius:10px;padding:0 16px;font-size:13px;font-weight:600;}
 .act-progress{margin-bottom:6px;}
 .act-progress-title{font-size:12px;color:#9aa0aa;margin:10px 2px 6px;letter-spacing:.5px;}
+
+/* =========================================================
+ * 【家园】同居生活：主界面 / 四大区域 / 衣柜 / 冰箱 / 灶台 / 时间轴
+ * ========================================================= */
+.hm-hero{
+  position:relative;overflow:hidden;border-radius:22px;padding:16px;
+  background:linear-gradient(150deg,#eaf7ff 0%,#f4fbff 46%,#fff7ef 100%);
+  border:.5px solid rgba(60,60,67,.06);
+  box-shadow:0 8px 24px rgba(30,80,140,.07);
+}
+.hm-hero::after{
+  content:"";position:absolute;right:-46px;top:-54px;width:150px;height:150px;border-radius:50%;
+  background:radial-gradient(circle,rgba(255,214,165,.55),rgba(255,214,165,0) 70%);
+  pointer-events:none;
+}
+.hm-hero-main{display:flex;align-items:center;gap:12px;position:relative;z-index:1;}
+.hm-hero-ic{
+  width:52px;height:52px;border-radius:16px;flex-shrink:0;padding:11px;
+  color:#f59e0b;background:rgba(255,255,255,.82);
+  box-shadow:0 6px 16px rgba(245,158,11,.16);
+}
+.hm-hero-ic svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+.hm-hero-txt{flex:1;min-width:0;}
+.hm-hero-t{font-size:16px;font-weight:700;color:#1C1C1E;letter-spacing:.3px;}
+.hm-hero-d{
+  font-size:12px;color:#7C8494;line-height:1.55;margin-top:4px;
+  overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+}
+.hm-visit{
+  display:flex;align-items:center;gap:10px;margin-top:13px;padding-top:12px;
+  border-top:1px dashed rgba(120,150,180,.24);position:relative;z-index:1;
+}
+.hm-visit-item{flex:1;min-width:0;}
+.hm-visit-item .k{font-size:10.5px;color:#93A0B2;letter-spacing:.3px;}
+.hm-visit-item .v{font-size:13px;font-weight:600;color:#3B4658;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.hm-visit-sep{width:.5px;height:26px;background:rgba(120,150,180,.22);flex-shrink:0;}
+.hm-trace-btn{
+  display:flex;align-items:center;gap:9px;width:100%;margin-top:10px;
+  background:#fff;border-radius:16px;padding:12px 14px;
+  border:.5px solid rgba(60,60,67,.08);box-shadow:var(--shadow);
+  transition:transform .12s ease,opacity .12s ease;
+}
+.hm-trace-btn:active{transform:scale(.985);opacity:.92;}
+.hm-trace-ic{width:22px;height:22px;flex-shrink:0;color:var(--primary);display:grid;place-items:center;}
+.hm-trace-ic svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+.hm-trace-txt{flex:1;text-align:left;font-size:13.5px;font-weight:600;color:#2C3444;}
+.hm-trace-arrow{color:#C7C7CC;font-size:20px;line-height:1;}
+/* 清空生活痕迹：极小、右对齐的弱化文字按钮，避免误触 */
+.hm-trace-tools{display:flex;justify-content:flex-end;margin-top:2px;}
+.hm-trace-clear{font-size:10.5px;color:#A8AFBB;padding:4px 4px;letter-spacing:.2px;}
+.hm-trace-clear:active{color:var(--danger);}
+.hm-chips{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;}
+.hm-chip{
+  display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border-radius:999px;
+  background:rgba(255,255,255,.86);border:.5px solid rgba(60,60,67,.08);
+  font-size:11px;color:#5C6575;font-weight:500;
+  transition:transform .12s ease,background .12s ease;
+}
+.hm-chip span{font-size:12px;line-height:1;}
+.hm-chip:active{transform:scale(.96);background:#fff;}
+.hm-rooms{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;}
+.hm-room{
+  display:flex;flex-direction:column;align-items:flex-start;gap:5px;text-align:left;
+  background:#fff;border-radius:20px;padding:14px;
+  border:.5px solid rgba(60,60,67,.07);box-shadow:0 4px 14px rgba(24,44,74,.05);
+  transition:transform .12s ease,box-shadow .12s ease;
+}
+.hm-room:active{transform:scale(.975);box-shadow:0 2px 8px rgba(24,44,74,.06);}
+.hm-room-ic{
+  width:40px;height:40px;border-radius:13px;padding:9px;margin-bottom:2px;
+  color:var(--primary);background:rgba(18,183,245,.10);
+}
+.hm-room-ic svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+.hm-room:nth-child(2) .hm-room-ic{color:#a78bfa;background:rgba(167,139,250,.12);}
+.hm-room:nth-child(3) .hm-room-ic{color:#34c759;background:rgba(52,199,89,.11);}
+.hm-room:nth-child(4) .hm-room-ic{color:#f59e0b;background:rgba(245,158,11,.12);}
+.hm-room-nm{font-size:15px;font-weight:700;color:#1C1C1E;}
+.hm-room-ds{font-size:10.5px;color:#98A1B0;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;}
+.hm-foot{text-align:center;font-size:10.5px;color:#B4BAC5;letter-spacing:.4px;padding:20px 0 6px;}
+
+.hm-room-hero{
+  display:flex;align-items:center;gap:12px;border-radius:18px;padding:14px;
+  background:linear-gradient(135deg,#fff,#f7fbff);border:.5px solid rgba(60,60,67,.07);
+  margin-bottom:12px;box-shadow:var(--shadow);
+}
+.hm-room-hero .ic{width:40px;height:40px;flex-shrink:0;color:var(--primary);padding:8px;border-radius:12px;background:rgba(18,183,245,.10);}
+.hm-room-hero .ic svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+.hm-room-hero .txt{flex:1;min-width:0;}
+.hm-room-hero .t{font-size:15px;font-weight:700;color:#1C1C1E;}
+.hm-room-hero .d{font-size:11.5px;color:#8E96A5;margin-top:3px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
+.rt-entry-card{margin-bottom:10px;}
+
+.hm-card{
+  background:#fff;border-radius:18px;padding:14px;
+  border:.5px solid rgba(60,60,67,.08);box-shadow:var(--shadow);margin-bottom:12px;
+}
+.hm-card-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;}
+.hm-card-hd .t{font-size:14px;font-weight:700;color:#1C1C1E;}
+.hm-card-hd .s{font-size:11px;color:#A0A7B3;}
+.hm-primary-btn{
+  background:linear-gradient(135deg,#12b7f5,#38c6ff);color:#fff;font-size:13px;font-weight:600;
+  border-radius:12px;padding:10px 14px;box-shadow:0 6px 16px rgba(18,183,245,.22);
+  transition:transform .12s ease,opacity .12s ease;white-space:nowrap;
+}
+.hm-primary-btn:active{transform:scale(.97);opacity:.9;}
+.hm-primary-btn.small{padding:7px 12px;font-size:12px;border-radius:10px;box-shadow:none;}
+.hm-primary-btn:disabled{background:#E7E9EE;color:#AEB4BF;box-shadow:none;cursor:default;}
+.hm-mini-btn{
+  font-size:11.5px;font-weight:600;color:var(--primary);
+  background:rgba(18,183,245,.10);border-radius:10px;padding:6px 10px;white-space:nowrap;
+}
+.hm-mini-btn:active{background:rgba(18,183,245,.18);}
+.hm-note{font-size:10.5px;color:#A8AFBB;line-height:1.6;padding:6px 2px 2px;}
+.hm-empty{text-align:center;padding:24px 10px 20px;}
+.hm-empty .e{font-size:34px;line-height:1;}
+.hm-empty .t{font-size:13px;font-weight:600;color:#4B5260;margin-top:8px;}
+.hm-empty .d{font-size:11.5px;color:#A0A7B3;margin-top:4px;line-height:1.6;}
+
+/* ---------- 衣柜 ---------- */
+.wd-outfit{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.wd-slot{background:#F7F9FC;border-radius:13px;padding:9px 10px;border:.5px solid rgba(60,60,67,.05);}
+.wd-slot .k{font-size:10px;color:#9AA3B2;letter-spacing:.3px;}
+.wd-slot .v{display:flex;align-items:center;gap:5px;margin-top:4px;min-height:20px;font-size:12px;color:#3B4658;font-weight:500;}
+.wd-slot .v .e{font-size:16px;line-height:1;}
+.wd-slot .v .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.wd-slot .empty{font-size:11px;color:#B4BAC5;font-weight:400;}
+.wd-slot .empty.opt{color:#C7CCD5;}
+.wd-slot.opt{border-style:dashed;}
+/* 第五个部位（小饰品）占满一行，避免 5 个格子出现半空行 */
+.wd-outfit .wd-slot:last-child{grid-column:span 2;}
+.wd-plan{margin-top:12px;padding-top:11px;border-top:1px dashed #EBEEF3;display:flex;flex-direction:column;gap:8px;}
+.wd-plan-txt{font-size:11.5px;color:#8E96A5;line-height:1.5;}
+.wd-group{margin-top:12px;}
+.wd-group:first-of-type{margin-top:0;}
+.wd-group-hd{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#5C6575;margin-bottom:7px;}
+.wd-group-hd .cnt{font-size:10px;color:#A0A7B3;background:#F2F4F8;border-radius:999px;padding:1px 6px;}
+.wd-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;}
+.wd-cloth{
+  position:relative;display:flex;align-items:center;gap:6px;
+  background:#F9FAFC;border:.5px solid rgba(60,60,67,.06);border-radius:12px;
+  padding:9px 24px 9px 10px;min-width:0;
+}
+.wd-cloth .e{font-size:17px;flex-shrink:0;line-height:1;}
+.wd-cloth .n{font-size:11.5px;color:#3B4658;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.wd-del{
+  position:absolute;right:4px;top:50%;transform:translateY(-50%);
+  width:18px;height:18px;display:grid;place-items:center;border-radius:50%;
+  font-size:9px;color:#C2C7D0;background:transparent;
+}
+.wd-del:active{background:#EEF0F4;color:var(--danger);}
+.wd-empty{font-size:11px;color:#B4BAC5;padding:4px 2px;}
+.wd-pick-row{display:flex;gap:8px;padding:9px 0;border-bottom:1px dashed #EFF1F5;}
+.wd-pick-row:last-child{border-bottom:0;}
+.wd-pick-k{flex-shrink:0;width:48px;font-size:11.5px;line-height:1.45;color:#8E96A5;font-weight:600;padding-top:6px;}
+.wd-pick-k .opt{display:block;margin-top:1px;font-size:8px;line-height:1;color:#C2C7D0;font-weight:400;}
+.wd-pick-list{display:flex;flex-wrap:wrap;gap:6px;flex:1;min-width:0;}
+.wd-pick{
+  display:inline-flex;align-items:center;gap:3px;padding:5px 9px;border-radius:999px;
+  background:#F4F6FA;border:.5px solid transparent;font-size:11.5px;color:#5C6575;
+}
+.wd-pick span{font-size:13px;line-height:1;}
+.wd-pick.sel{background:rgba(18,183,245,.12);border-color:rgba(18,183,245,.35);color:#0a9bd4;font-weight:600;}
+
+/* ---------- 冰箱 ---------- */
+.hk-fridge-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px;padding:0 2px;}
+.hk-fridge-top .t{font-size:14px;font-weight:700;color:#1C1C1E;}
+.hk-ing-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+.hk-ing{
+  position:relative;background:#fff;border-radius:16px;padding:11px 8px 10px;
+  border:.5px solid rgba(60,60,67,.07);text-align:center;box-shadow:0 3px 10px rgba(24,44,74,.04);
+}
+.hk-ing .e{font-size:26px;line-height:1;}
+.hk-ing .n{font-size:11.5px;font-weight:600;color:#3B4658;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.hk-ing .exp{font-size:9.5px;color:#A0A7B3;margin-top:2px;}
+.hk-ing .exp.soon{color:#F59E0B;}
+.hk-src{
+  display:inline-block;margin-top:5px;font-size:8.5px;line-height:1.2;
+  padding:1px 5px;border-radius:999px;letter-spacing:.2px;
+  background:#F2F5FA;color:#8E96A5;
+}
+.hk-src.ta{background:rgba(167,139,250,.14);color:#8b5cf6;}
+.hk-src.me{background:rgba(18,183,245,.12);color:#0a9bd4;}
+.hk-ing-del{
+  position:absolute;right:4px;top:4px;width:17px;height:17px;border-radius:50%;
+  display:grid;place-items:center;font-size:8px;color:#C7CCD5;
+}
+.hk-ing-del:active{background:#F4F5F8;color:var(--danger);}
+
+/* ---------- 灶台 ---------- */
+.hk-cook,.hk-dish{
+  display:flex;align-items:center;gap:10px;padding:10px;
+  background:#F9FAFC;border-radius:14px;margin-bottom:8px;
+  border:.5px solid rgba(60,60,67,.05);
+}
+.hk-cook:last-child,.hk-dish:last-child{margin-bottom:0;}
+.hk-cook .de,.hk-dish .de{font-size:26px;line-height:1;flex-shrink:0;}
+.hk-cook .info,.hk-dish .info{flex:1;min-width:0;}
+.hk-cook .nm,.hk-dish .nm{font-size:13px;font-weight:600;color:#2C3444;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.hk-cook .cd{font-size:11px;color:var(--primary);margin-top:2px;font-variant-numeric:tabular-nums;}
+.hk-dish .by{font-size:10.5px;color:#9AA3B2;margin-top:2px;}
+.hk-dish .acts{display:flex;align-items:center;gap:6px;flex-shrink:0;}
+.hk-dish .left-tag{font-size:9.5px;color:#a78bfa;background:rgba(167,139,250,.12);border-radius:999px;padding:2px 7px;white-space:nowrap;}
+.hk-recipe{
+  border:.5px solid rgba(60,60,67,.07);border-radius:14px;padding:11px;
+  margin-bottom:9px;background:#fff;
+}
+.hk-recipe:last-child{margin-bottom:0;}
+.hk-recipe.lack{background:#FCFCFD;}
+.hk-recipe .hd{display:flex;align-items:center;gap:7px;}
+.hk-recipe .de{font-size:22px;line-height:1;flex-shrink:0;}
+.hk-recipe .nm{font-size:13.5px;font-weight:700;color:#1C1C1E;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.hk-recipe .tm{font-size:10.5px;color:#A0A7B3;margin-left:auto;flex-shrink:0;}
+.hk-rc-del{width:20px;height:20px;display:grid;place-items:center;border-radius:50%;font-size:9px;color:#C2C7D0;flex-shrink:0;}
+.hk-rc-del:active{background:#F4F5F8;color:var(--danger);}
+.hk-recipe .ings{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;}
+.hk-ing-tag{
+  font-size:10px;color:#5C6575;background:#F4F6FA;border-radius:999px;padding:3px 7px;
+  line-height:1.3;
+}
+.hk-ing-tag.miss{background:rgba(255,90,95,.08);color:#f07377;text-decoration:line-through;}
+.hk-recipe .ft{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:9px;padding-top:9px;border-top:1px dashed #F0F2F6;}
+.hk-recipe .hint{font-size:10px;color:#9AA3B2;line-height:1.4;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.hk-rc-rows{display:flex;flex-direction:column;gap:7px;}
+.hk-rc-row{display:flex;align-items:center;gap:6px;}
+.hk-rc-row .hk-ing-name{flex:1.25;min-width:0;}
+.hk-rc-row .hk-ing-emoji{flex:.6;min-width:0;text-align:center;}
+.hk-rc-row-btn{
+  width:28px;height:28px;flex-shrink:0;border-radius:9px;font-size:15px;line-height:1;
+  background:#F4F6FA;color:#5C6575;display:grid;place-items:center;
+}
+.hk-rc-row-btn:active{background:#E9EDF4;color:var(--primary);}
+
+/* ---------- 生活痕迹时间轴 ---------- */
+/* 归属切换：默认只看 TA 与旁白 */
+.hm-tl-tabs{display:flex;gap:6px;margin:0 0 12px;}
+.hm-tl-tab{font-size:11.5px;font-weight:600;color:#8E96A5;background:#F2F4F8;border-radius:999px;padding:5px 12px;transition:color .15s,background .15s;}
+.hm-tl-tab.active{color:#0a9bd4;background:rgba(18,183,245,.12);}
+.hm-tl{border-left:1.5px solid #E8EBF1;margin-left:5px;padding-left:14px;}
+.hm-tl-item{position:relative;padding-bottom:16px;}
+.hm-tl-item:last-child{padding-bottom:2px;}
+.hm-tl-item .dot{
+  position:absolute;left:-19.5px;top:4px;width:8px;height:8px;border-radius:50%;
+  background:#fff;border:2px solid var(--primary);box-shadow:0 0 0 3px rgba(18,183,245,.10);
+}
+.hm-tl-item .meta{display:flex;align-items:center;gap:6px;}
+/* 归属角标：TA / 我 / 旁白 */
+.hm-tl-item .who{font-size:9px;line-height:1;border-radius:5px;padding:2px 5px;font-weight:700;letter-spacing:.2px;}
+.hm-tl-item .who.ta{color:#0a9bd4;background:rgba(18,183,245,.12);}
+.hm-tl-item .who.me{color:#C2410C;background:rgba(249,115,22,.14);}
+.hm-tl-item .who.sys{color:#7C8595;background:#EFF1F5;}
+.hm-tl-item.is-user .dot{border-color:#F59E0B;box-shadow:0 0 0 3px rgba(245,158,11,.12);}
+.hm-tl-item.is-sys .dot{border-color:#C3C9D4;box-shadow:0 0 0 3px rgba(195,201,212,.16);}
+.hm-tl-item.is-user .txt{color:#8A6A4A;}
+.hm-tl-item .room{font-size:9.5px;color:#0a9bd4;background:rgba(18,183,245,.10);border-radius:999px;padding:1px 6px;font-weight:600;}
+.hm-tl-item .time{font-size:10px;color:#A8AFBB;}
+.hm-tl-item .txt{font-size:12.5px;color:#3B4658;line-height:1.65;margin-top:4px;}
 .act-save-card{display:block;width:100%;text-align:left;background:#fff;border-radius:12px;padding:10px 12px;margin-bottom:8px;box-shadow:var(--shadow);}
 .act-save-card .t{font-size:14px;font-weight:600;color:var(--custom-text-color,#333333);}
 .act-save-card .d{font-size:12px;color:var(--sub);margin-top:3px;}
