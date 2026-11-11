@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v9.0.1';
+const APP_VERSION = 'v9.0.2';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -3758,6 +3758,12 @@ function renderChatMessages(keepScroll) {
 
   visible.forEach((m, vi) => {
     const i = startIdx + vi;
+    /* 幽灵消息容错：文本类消息若既无文字也无图片/引用，整条跳过（兼容旧存档里的空气泡） */
+    if (!m.recalled && (m.type === 'text' || !m.type)) {
+      const txt = String(m.content == null ? (m.text || '') : m.content);
+      const hasImgs = Array.isArray(m.images) && m.images.some(x => typeof x === 'string' && x);
+      if (!txt.trim() && !hasImgs && !m.quote) return;
+    }
     if (!lastTs || m.ts - lastTs > 5 * 60 * 1000) {
       html += `<div class="time-sep">${fmtMsgTime(m.ts)}</div>`;
     }
@@ -4844,6 +4850,10 @@ function sendUserMessage(roleId, payload) {
   /* 本地存储与 TA 的延迟回复放到下一轮事件循环，避免阻塞 UI 上屏 */
   setTimeout(() => { persist(); }, 0);
   setTimeout(() => { scheduleReply(roleId); refreshMessagesPage(); }, 0);
+  /* 聊天点单彩蛋：关键词命中才进异步队列，绝不阻塞上屏 */
+  if ((!msg.type || msg.type === 'text') && msg.content) {
+    setTimeout(() => { homeFridgeChatEasterEgg(roleId, msg.content); }, 0);
+  }
 }
 
 /* 只构建「我方」单条消息（文字 / 图文）的 DOM，供发送时增量追加 */
@@ -5359,6 +5369,13 @@ function finishReplyStep(roleId) {
 function pushDreamMessage(roleId, payload) {
   if (!roleById(roleId)) return;
   const msg = Object.assign({ id: uid(), role: 'dream', type: 'text', ts: Date.now() }, payload);
+  /* 兼容只传 text 的旧调用：统一补到 content，避免渲染层读到空串变幽灵气泡 */
+  const raw = msg.content != null ? msg.content : msg.text;
+  msg.content = String(raw == null ? '' : raw);
+  if (!msg.text) msg.text = msg.content;
+  /* 文本消息必须真有内容才入聊天：空白内容直接丢弃（图片 / 引用卡片除外） */
+  const hasImgs = Array.isArray(msg.images) && msg.images.some(x => typeof x === 'string' && x);
+  if (msg.type === 'text' && !msg.content.trim() && !hasImgs && !msg.quote) return;
   chatOf(roleId).push(msg);
   jarOnChatActivity();  /* 拾光瓶：收到 TA 消息同样计为当日互动 */
   const open = currentRoute.page === 'chat' && currentRoute.roleId === roleId;
@@ -18060,24 +18077,30 @@ const HOME_DEFAULT_CLOTHES = [
   { id: 'cl-a3', cat: 'accessory', name: '格纹围巾', emoji: '🧣' }
 ];
 
-/* 内置食材库：名称 / Emoji / 默认保质期（天） */
+/* 内置食材库：名称 / Emoji / 保质期（天）/ TA 买回来时附带的专属台词 */
 const HOME_INGREDIENTS = [
-  { name: '番茄', emoji: '🍅', days: 7 },
-  { name: '鸡蛋', emoji: '🥚', days: 20 },
-  { name: '土豆', emoji: '🥔', days: 20 },
-  { name: '牛肉', emoji: '🥩', days: 5 },
-  { name: '青菜', emoji: '🥬', days: 5 },
-  { name: '胡萝卜', emoji: '🥕', days: 14 },
-  { name: '面条', emoji: '🍜', days: 30 },
-  { name: '米饭', emoji: '🍚', days: 3 },
-  { name: '牛奶', emoji: '🥛', days: 7 },
-  { name: '蘑菇', emoji: '🍄', days: 5 },
-  { name: '豆腐', emoji: '🧊', days: 3 },
-  { name: '虾', emoji: '🦐', days: 3 },
-  { name: '葱', emoji: '🌿', days: 7 },
-  { name: '芝士', emoji: '🧀', days: 20 },
-  { name: '鸡肉', emoji: '🍗', days: 3 },
-  { name: '玉米', emoji: '🌽', days: 7 }
+  { name: '番茄', emoji: '🍅', days: 7, dialogue: '洗两个，我给你做番茄炒蛋。' },
+  { name: '鸡蛋', emoji: '🥚', days: 20, dialogue: '给你补充营养的。' },
+  { name: '土豆', emoji: '🥔', days: 20, dialogue: '炖牛肉缺它不行，等我。' },
+  { name: '牛肉', emoji: '🥩', days: 5, dialogue: '今晚吃好一点。' },
+  { name: '青菜', emoji: '🥬', days: 5, dialogue: '别老吃肉，也要吃点青菜。' },
+  { name: '胡萝卜', emoji: '🥕', days: 14, dialogue: '对眼睛好，别挑出来。' },
+  { name: '面条', emoji: '🍜', days: 30, dialogue: '半夜饿了就煮这个。' },
+  { name: '米饭', emoji: '🍚', days: 3, dialogue: '剩的可以炒饭，别浪费。' },
+  { name: '牛奶', emoji: '🥛', days: 7, dialogue: '早上记得热一下喝，别空腹。' },
+  { name: '蘑菇', emoji: '🍄', days: 5, dialogue: '煮汤很鲜，留给你。' },
+  { name: '豆腐', emoji: '🧊', days: 3, dialogue: '配蘑菇煮汤，暖暖胃。' },
+  { name: '虾', emoji: '🦐', days: 3, dialogue: '剥好了再吃，别扎到手。' },
+  { name: '葱', emoji: '🌿', days: 7, dialogue: '撒一点更香。' },
+  { name: '芝士', emoji: '🧀', days: 20, dialogue: '焗虾用的，别偷吃。' },
+  { name: '鸡肉', emoji: '🍗', days: 3, dialogue: '腌一晚上更好吃。' },
+  { name: '玉米', emoji: '🌽', days: 7, dialogue: '甜甜的，你肯定喜欢。' },
+  { name: '草莓', emoji: '🍓', days: 3, dialogue: '记得洗了再吃，特意挑的甜的。' },
+  { name: '冰啤酒', emoji: '🍺', days: 90, dialogue: '别偷喝我的，你只能喝一口。' },
+  { name: '小蛋糕', emoji: '🍰', days: 3, dialogue: '昨天路过买的，馋了就吃。' },
+  { name: '果汁', emoji: '🧃', days: 10, dialogue: '冰一会儿更好喝。' },
+  { name: '巧克力', emoji: '🍫', days: 120, dialogue: '心情不好就吃一块。' },
+  { name: '奶茶', emoji: '🧋', days: 1, dialogue: '给你买的，少糖。' }
 ];
 
 /* 内置食谱：统一结构 = 菜名 / 菜品 Emoji / 食材数组（名称 + Emoji）/ 烹饪时间（分钟） */
@@ -18130,6 +18153,8 @@ const HOME_TRACE_GAP_MS = 3 * 60 * 60 * 1000;    /* 离开超过 3 小时，回�
 const HOME_TA_BUY_GAP_MS = 5 * 60 * 60 * 1000;   /* TA 至少 5 小时才会补一次冰箱 */
 const HOME_TA_COOK_GAP_MS = 4 * 60 * 60 * 1000;  /* TA 至少 4 小时才会主动做一次饭 */
 const HOME_TA_EAT_DELAY_MS = 60 * 1000;          /* 留给 TA 的菜，1 分钟后 TA 会吃掉并留字卡 */
+const HOME_RESTOCK_GAP_MS = 12 * 60 * 60 * 1000; /* 打开厨房/冰箱时，超过 12 小时才触发一次偷偷进货 */
+const HOME_EASTER_EGG_DAILY_MAX = 2;             /* 聊天点单彩蛋每天最多触发次数 */
 const HOME_TRACE_MAX = 60;
 
 let homeCookTimer = null;                        /* 灶台倒计时（仅页面打开期间存在） */
@@ -18151,6 +18176,9 @@ function homeDefaultState() {
     dishes: [],
     lastTaBuyAt: 0,
     lastTaCookAt: 0,
+    lastFridgeRestockTime: 0,
+    easterEggDate: '',
+    easterEggCount: 0,
     firstBootDone: false
   };
 }
@@ -18178,6 +18206,9 @@ function normalizeHome(src) {
   out.lastTraceAt = Math.max(0, Number(s.lastTraceAt) || 0);
   out.lastTaBuyAt = Math.max(0, Number(s.lastTaBuyAt) || 0);
   out.lastTaCookAt = Math.max(0, Number(s.lastTaCookAt) || 0);
+  out.lastFridgeRestockTime = Math.max(0, Number(s.lastFridgeRestockTime) || 0);
+  out.easterEggDate = typeof s.easterEggDate === 'string' ? s.easterEggDate : '';
+  out.easterEggCount = Math.max(0, Math.round(Number(s.easterEggCount) || 0));
   out.firstBootDone = s.firstBootDone === true;
   out.traces = Array.isArray(s.traces) ? s.traces.filter(t => t && typeof t === 'object' && t.text).map(t => ({
     id: String(t.id || uid()),
@@ -18208,7 +18239,11 @@ function normalizeHome(src) {
       emoji: String(f.emoji || '🥡').slice(0, 4),
       boughtAt,
       expireAt: Number(f.expireAt) || (boughtAt + 7 * 86400000),
-      addedBy: f.addedBy === 'ta' ? 'ta' : 'user'
+      addedBy: f.addedBy === 'ta' ? 'ta' : 'user',
+      /* 台词持久化：旧存档里 TA 买的食材没有台词时，按食材库补回来 */
+      dialogue: f.addedBy === 'ta'
+        ? String(f.dialogue || homeIngredientDialogue(name) || '').slice(0, 60)
+        : ''
     };
   }).filter(Boolean) : [];
   out.recipes = Array.isArray(s.recipes) ? s.recipes.filter(r => r && typeof r === 'object').map(r => {
@@ -18385,17 +18420,83 @@ function homeWardrobeDesc() {
 }
 
 /* ---------- 冰箱 ---------- */
-function homeAddFridgeItem(name, emoji, days, addedBy, ts) {
+/* 从内置食材库查专属台词（自定义食材返回空串） */
+function homeIngredientDialogue(name) {
+  const hit = HOME_INGREDIENTS.find(i => i.name === name);
+  return hit ? (hit.dialogue || '') : '';
+}
+function homeAddFridgeItem(name, emoji, days, addedBy, ts, dialogue) {
   const now = Number(ts) || Date.now();
   const d = Math.max(1, Number(days) || 7);
+  const by = addedBy === 'ta' ? 'ta' : 'user';
   state.home.fridge.push({
     id: uid(),
     name: String(name).slice(0, 20),
     emoji: String(emoji || '🥡').slice(0, 4),
     boughtAt: now,
     expireAt: now + d * 86400000,
-    addedBy: addedBy === 'ta' ? 'ta' : 'user'
+    addedBy: by,
+    /* 只有 TA 买的才带留言；没显式传入时自动按食材库补齐 */
+    dialogue: by === 'ta' ? String(dialogue || homeIngredientDialogue(name) || '').slice(0, 60) : ''
   });
+}
+/* TA 偷偷进货：打开【厨房】或【冰箱】时检查，间隔超过 12 小时才补 1~2 样食材 */
+function homeFridgeRestockIfDue() {
+  const h = state.home;
+  const now = Date.now();
+  const last = Number(h.lastFridgeRestockTime) || 0;
+  if (last && now - last < HOME_RESTOCK_GAP_MS) return false;
+  h.lastFridgeRestockTime = now;
+  const count = randInt(1, 2);
+  const pool = HOME_INGREDIENTS.slice();
+  const names = [];
+  for (let i = 0; i < count && pool.length; i++) {
+    const ing = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+    homeAddFridgeItem(ing.name, ing.emoji, ing.days, 'ta', now);
+    names.push(ing.emoji + ing.name);
+  }
+  persist(true);
+  showToast(`冰箱里好像多出了几样东西……TA偷偷去进货了（${names.join('、')}）`);
+  return true;
+}
+/* ---------- 聊天点单彩蛋：说想吃某样东西，TA 有概率偷偷买回来 ---------- */
+const HOME_FRIDGE_WISHES = [
+  { re: /草莓/, name: '草莓' },
+  { re: /奶茶/, name: '奶茶' },
+  { re: /蛋糕/, name: '小蛋糕' },
+  { re: /牛奶/, name: '牛奶' },
+  { re: /啤酒/, name: '冰啤酒' },
+  { re: /巧克力/, name: '巧克力' },
+  { re: /果汁|橙汁/, name: '果汁' }
+];
+const HOME_EASTER_EGG_REPLIES = [
+  '路过超市，顺手给你买回来了。',
+  '放冰箱了，记得吃。',
+  '就知道你会想吃这个。'
+];
+/* 命中关键词 → 90% 概率进货 + TA 回一句；每天最多 2 次，全部异步执行不阻塞发送 */
+function homeFridgeChatEasterEgg(roleId, text) {
+  if (!text || !state || !state.home || sleepSilent()) return false;
+  const wish = HOME_FRIDGE_WISHES.find(w => w.re.test(text));
+  if (!wish) return false;
+  const h = state.home;
+  const today = statusDateKey();
+  if (h.easterEggDate !== today) { h.easterEggDate = today; h.easterEggCount = 0; }
+  if ((h.easterEggCount || 0) >= HOME_EASTER_EGG_DAILY_MAX) return false;
+  if (Math.random() >= 0.9) return false;
+  const ing = HOME_INGREDIENTS.find(i => i.name === wish.name);
+  if (!ing) return false;
+  h.easterEggCount = (h.easterEggCount || 0) + 1;
+  homeAddFridgeItem(ing.name, ing.emoji, ing.days, 'ta');
+  persist(true);
+  homeRefreshIfOpen(['homefridge', 'homekitchen', 'readtogether']);
+  setTimeout(() => {
+    if (!roleById(roleId) || sleepSilent()) return;
+    const pool = HOME_EASTER_EGG_REPLIES.concat(ing.dialogue ? [ing.dialogue] : []);
+    pushDreamMessage(roleId, { type: 'text', text: pool[Math.floor(Math.random() * pool.length)] });
+    showToast(`TA 把${ing.emoji}${ing.name}放进了冰箱`);
+  }, randInt(900, 1800));
+  return true;
 }
 /* 自动清理过期食材：返回清理数量（打开冰箱时调用） */
 function homeCleanFridge() {
@@ -18570,6 +18671,21 @@ function homeTaCookIfDue() {
   return true;
 }
 /* 留给 TA 的菜：稍后 TA 会吃掉，并在主聊天里留下一张字卡留言 */
+/* TA 吃掉留给它的菜后的留言：字卡抽取失败 / 空白时，必须落到兜底文案 */
+const HOME_EAT_REPLY_FALLBACKS = [
+  '这菜做得真好吃，谢谢款待！',
+  '光盘啦，下次换我给你做。'
+];
+function homeEatReplyText(roleId, dish) {
+  let text = '';
+  try {
+    text = String(composeCardText(roleId, { key: 'home-dish:' + dish.id }) || '').trim();
+  } catch (e) { text = ''; }
+  if (!text) text = HOME_EAT_REPLY_FALLBACKS[Math.floor(Math.random() * HOME_EAT_REPLY_FALLBACKS.length)];
+  if (!text || !text.trim()) text = HOME_EAT_REPLY_FALLBACKS[0];   /* 双保险：绝不允许空串入聊天 */
+  return text;
+}
+
 function homeTaEatLeftDishes() {
   const h = state.home;
   const now = Date.now();
@@ -18578,10 +18694,12 @@ function homeTaEatLeftDishes() {
   if (!targets.length) return false;
   targets.forEach(d => {
     if (roleId && roleById(roleId)) {
-      const card = composeCardText(roleId, { key: 'home-dish:' + d.id });
+      const reply = homeEatReplyText(roleId, d);
       pushDreamMessage(roleId, {
         type: 'text',
-        text: card || `你留的${d.name}我吃完啦，很好吃。下次也做给我好不好？`
+        sender: 'ta',
+        content: reply,   /* 渲染层读的是 content */
+        text: reply       /* 搜索 / 预览等旧逻辑读 text，保持同步 */
       });
     }
     homePushTrace('kitchen', `TA吃掉了${homeDishMakerText(d, 'ta')}${d.dishEmoji}${d.name}，还在字卡上写了留言`, now, 'ta');
@@ -18752,6 +18870,8 @@ function renderHomeRoomPage(roomKey) {
   const roleId = homeRoleId();
   const roleName = esc(taName(roleId));
   const h = state.home;
+  /* 进入厨房也要检查 TA 有没有偷偷进货（与冰箱页同一套 12 小时逻辑） */
+  if (room.key === 'kitchen') homeFridgeRestockIfDue();
   const latest = h.traces.find(t => t.room === room.key && t.actor !== 'user');
   let entries = [];
   if (room.key === 'living') {
@@ -18943,12 +19063,44 @@ function homeOpenAddCloth() {
 }
 
 /* ---------- 厨房·冰箱 ---------- */
+let fridgeBubbleEl = null;
+let fridgeBubbleTimer = 0;
+/* 关闭食材台词气泡 */
+function homeCloseFridgeBubble() {
+  if (fridgeBubbleTimer) { clearTimeout(fridgeBubbleTimer); fridgeBubbleTimer = 0; }
+  if (fridgeBubbleEl) {
+    const el = fridgeBubbleEl;
+    fridgeBubbleEl = null;
+    /* 立即移除旧气泡，避免连点时新旧气泡叠在一起 */
+    if (el.parentNode) el.parentNode.removeChild(el);
+  }
+}
+/* 在食材卡片上方弹出小气泡：TA 买的显示专属留言，自己买的显示普通提示 */
+function homeShowFridgeBubble(card, text, mine) {
+  homeCloseFridgeBubble();
+  const wrap = card.closest('.hk-ing-grid');
+  if (!wrap) return;
+  if (getComputedStyle(wrap).position === 'static') wrap.style.position = 'relative';
+  const el = document.createElement('div');
+  el.className = 'hk-bubble' + (mine ? ' mine' : '');
+  el.innerHTML = `<div class="who">${mine ? '你买的' : 'TA 的留言'}</div><div class="t">${esc(text)}</div>`;
+  wrap.appendChild(el);
+  const ar = card.getBoundingClientRect();
+  const wr = wrap.getBoundingClientRect();
+  const x = clamp(ar.left - wr.left + ar.width / 2, 62, Math.max(62, wr.width - 62));
+  el.style.left = x + 'px';
+  el.style.top = Math.max(0, ar.top - wr.top - 7) + 'px';
+  requestAnimationFrame(() => el.classList.add('show'));
+  fridgeBubbleEl = el;
+  fridgeBubbleTimer = setTimeout(homeCloseFridgeBubble, 3800);
+}
+
 function renderHomeFridgePage() {
   const removed = homeCleanFridge();
-  if (removed) {
-    persist(true);
-    showToast(`自动清理了 ${removed} 份过期食材`);
-  }
+  if (removed) persist(true);
+  /* TA 偷偷进货：超过 12 小时没检查过，就补 1~2 样食材（内部会自己弹提示） */
+  const restocked = homeFridgeRestockIfDue();
+  if (removed && !restocked) showToast(`自动清理了 ${removed} 份过期食材`);
   const h = state.home;
   const list = h.fridge.slice().sort((a, b) => (Number(a.expireAt) || 0) - (Number(b.expireAt) || 0));
   const body = subShell('冰箱', `
@@ -18960,7 +19112,8 @@ function renderHomeFridgePage() {
       ${list.map(f => {
         const left = homeFridgeDaysLeft(f);
         const expTxt = left < 0 ? '已过期' : left === 0 ? '今天到期' : '剩 ' + left + ' 天';
-        return `<div class="hk-ing">
+        return `<div class="hk-ing" data-fridge-ing="${f.id}" role="button" tabindex="0">
+          ${f.addedBy === 'ta' && f.dialogue ? '<span class="hk-ing-talk">💬</span>' : ''}
           <div class="e">${esc(f.emoji)}</div>
           <div class="n">${esc(f.name)}</div>
           <div class="exp ${left <= 1 ? 'soon' : ''}">${expTxt}</div>
@@ -18977,8 +19130,23 @@ function renderHomeFridgePage() {
   `);
   const addBtn = $('[data-fridge-add]', body);
   if (addBtn) addBtn.addEventListener('click', homeOpenAddIngredient);
+  /* 点食材看留言：TA 买的弹专属台词，自己买的给普通提示 */
+  $$('[data-fridge-ing]', body).forEach(card => {
+    const show = () => {
+      const item = state.home.fridge.find(f => f.id === card.dataset.fridgeIng);
+      if (!item) return;
+      if (item.addedBy === 'ta' && item.dialogue) homeShowFridgeBubble(card, item.dialogue, false);
+      else homeShowFridgeBubble(card, `这是你买的食材，记得在 ${Math.max(1, homeFridgeDaysLeft(item))} 天内吃掉。`, true);
+    };
+    card.addEventListener('click', show);
+    card.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show(); }
+    });
+  });
   $$('[data-fridge-del]', body).forEach(btn => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', async e => {
+      e.stopPropagation();
+      homeCloseFridgeBubble();
       const item = state.home.fridge.find(f => f.id === btn.dataset.fridgeDel);
       if (!item) return;
       const ok = await confirmDialog('删除食材', `确定把【${item.name}】从冰箱里拿出来吗？`, '删除', true);
