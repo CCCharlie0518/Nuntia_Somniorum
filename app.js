@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v9.0.0';
+const APP_VERSION = 'v9.0.1';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -18133,7 +18133,7 @@ const HOME_TA_EAT_DELAY_MS = 60 * 1000;          /* 留给 TA 的菜，1 分钟�
 const HOME_TRACE_MAX = 60;
 
 let homeCookTimer = null;                        /* 灶台倒计时（仅页面打开期间存在） */
-const homeSession = { prevMe: 0, prevTa: 0 };    /* 本次启动时捕获的「上次来访」时间，用于顶部展示 */
+const homeSession = { prevMe: 0 };    /* 本次启动时捕获的「我上次来访」时间，用于顶部展示 */
 
 function homeDefaultState() {
   return {
@@ -18173,7 +18173,7 @@ function normalizeHome(src) {
   const d = homeDefaultState();
   const out = Object.assign({}, d);
   const s = (src && typeof src === 'object') ? src : {};
-  out.lastVisitTa = Math.max(0, Number(s.lastVisitTa) || 0);
+  out.lastVisitTa = Math.max(0, Number(s.lastVisitTa) || 0);   /* 旧字段仅兼容存档，展示已改为读取生活痕迹 */
   out.lastVisitMe = Math.max(0, Number(s.lastVisitMe) || 0);
   out.lastTraceAt = Math.max(0, Number(s.lastTraceAt) || 0);
   out.lastTaBuyAt = Math.max(0, Number(s.lastTaBuyAt) || 0);
@@ -18268,6 +18268,25 @@ function homeAgoText(ts) {
   if (diff < 3600 * 1000) return Math.max(1, Math.floor(diff / 60000)) + ' 分钟前来过';
   if (diff < 86400 * 1000) return Math.max(1, Math.floor(diff / 3600000)) + ' 小时前来过';
   return Math.max(1, Math.floor(diff / 86400000)) + ' 天前来过';
+}
+/* TA 上次来访 = 时间轴里最新一条「TA / 旁白」动态的时间。
+ * 头部看板与生活痕迹共用同一份数据源，绝不再单独维护来访时间变量。 */
+function homeTaVisitTs() {
+  const list = (state && state.home && state.home.traces) || [];
+  const hit = list.find(t => t && t.actor !== 'user');
+  return hit ? (Number(hit.ts) || 0) : 0;
+}
+/* 头部展示文案：没有痕迹时说明 TA 还没到 */
+function homeTaVisitText() {
+  const ts = homeTaVisitTs();
+  return ts ? homeAgoText(ts) : 'TA还在路上';
+}
+/* 新痕迹产生 / 定时轮询时，只更新这一处文案，不重建整页，避免闪烁 */
+function homeRefreshVisitAgo() {
+  if (!state || !state.home) return;
+  if (!currentRoute || currentRoute.page !== 'sub' || currentRoute.name !== 'readtogether') return;
+  const el = document.querySelector('#subBody [data-hm-ta-ago]');
+  if (el) el.textContent = homeTaVisitText();
 }
 function homeTraceTime(ts) {
   const t = Number(ts) || Date.now();
@@ -18610,7 +18629,6 @@ function homeOnBoot() {
   const h = state.home;
   const now = Date.now();
   homeSession.prevMe = Number(h.lastVisitMe) || 0;
-  homeSession.prevTa = Number(h.lastVisitTa) || 0;
   homeEnsureOutfit();
   /* 首次进入：TA 已经先买好一批食材放进冰箱 */
   if (!h.firstBootDone) {
@@ -18623,11 +18641,12 @@ function homeOnBoot() {
       homePushTrace('kitchen', 'TA把刚买回来的食材一样一样放进了冰箱', now - 2 * 3600000, 'ta');
     }
   }
-  if (!h.lastVisitTa) {
-    h.lastVisitTa = now - homeRandInt(30, 180) * 60000;
-  } else if (now - h.lastVisitTa > 60 * 60000 && Math.random() < 0.7) {
-    h.lastVisitTa = now - homeRandInt(5, 50) * 60000;
-    if (Math.random() < 0.7) homeRandomTrace(h.lastVisitTa);
+  /* TA 是否「来过」，完全以生活痕迹为准：距最新痕迹超过 1 小时，才补一条新痕迹 */
+  const lastTaTs = homeTaVisitTs();
+  if (!lastTaTs) {
+    homeRandomTrace(now - homeRandInt(30, 180) * 60000);
+  } else if (now - lastTaTs > 60 * 60000 && Math.random() < 0.7) {
+    homeRandomTrace(now - homeRandInt(5, 50) * 60000);
   }
   homeEnsureTraces();
   homeTaBuyIfDue(false);
@@ -18649,6 +18668,8 @@ function homeTick() {
   homeTaCookIfDue();
   if (rolled || traceAdded) persist();
   if (rolled) homeRefreshIfOpen(['readtogether', 'homebedroom', 'wardrobe']);
+  /* 每轮都按同一数据源刷新「TA上次来访」，分钟数会跟着走，新痕迹也会立刻同步到头部 */
+  homeRefreshVisitAgo();
 }
 
 /* ---------- 【家园】主页面 ---------- */
@@ -18672,7 +18693,7 @@ function renderReadTogetherPage() {
       <div class="hm-visit">
         <div class="hm-visit-item">
           <div class="k">TA上次来访</div>
-          <div class="v">${esc(homeAgoText(h.lastVisitTa))}</div>
+          <div class="v" data-hm-ta-ago>${esc(homeTaVisitText())}</div>
         </div>
         <div class="hm-visit-sep"></div>
         <div class="hm-visit-item">
