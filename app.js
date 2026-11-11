@@ -1,8 +1,8 @@
-
+﻿
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v8.8.0';
+const APP_VERSION = 'v8.9.0';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -702,7 +702,8 @@ function defaultState() {
       taVoiceChance: 30,
       /* TA 发心情卡片概率：命中时本次回复改为一张心情卡片（随机 emoji/名称 + 1 张字卡作备注） */
       taMoodChance: 15,
-      locationCooldown: 60,
+      /* TA的状态刷新时长（分钟）：0 表示不限制，默认 5 分钟 */
+      statusRefreshCooldownMins: 5,
       mergeChance: 50,
       mergeMin: 2,
       mergeMax: 3,
@@ -1129,6 +1130,8 @@ function mergeState(saved) {
       startTime: Number(r.startTime),
       endTime: Number(r.endTime),
       duration: Math.max(0, Number(r.duration) || (Number(r.endTime) - Number(r.startTime))),
+      /* 睡眠感受：结算卡中用户输入的文字，允许为空 */
+      feeling: typeof r.feeling === 'string' ? r.feeling : '',
       timeline: Array.isArray(r.timeline) ? r.timeline
         .filter(x => x && Number(x.ts))
         .map(x => ({
@@ -1205,9 +1208,14 @@ function mergeState(saved) {
     out.settings[k] = Number.isFinite(v) ? clamp(Math.round(v), 0, 300) : d.settings[k];
   });
   if (out.settings.replyDelayMax < out.settings.replyDelayMin) out.settings.replyDelayMax = out.settings.replyDelayMin;
-  /* 定位刷新冷却（秒）：0 表示不限制，范围 0~3600，默认 60 */
-  const lc = Number(out.settings.locationCooldown);
-  out.settings.locationCooldown = Number.isFinite(lc) ? clamp(Math.round(lc), 0, 3600) : 60;
+  /* TA的状态刷新时长（分钟）：0 表示不限制，范围 0~1440，默认 5；
+   * 旧版 locationCooldown 是「秒」，这里自动折算为分钟并清理旧字段 */
+  const hasNewCd = !!(src.settings && Object.prototype.hasOwnProperty.call(src.settings, 'statusRefreshCooldownMins'));
+  const legacyCdSec = Number(src.settings && src.settings.locationCooldown);
+  let cdMins = Number(out.settings.statusRefreshCooldownMins);
+  if (!hasNewCd && Number.isFinite(legacyCdSec)) cdMins = legacyCdSec / 60;
+  out.settings.statusRefreshCooldownMins = Number.isFinite(cdMins) ? clamp(Math.round(cdMins), 0, 1440) : 5;
+  delete out.settings.locationCooldown;
   /* 主题统一为 iMessage 蓝：旧默认色迁移，用户自定义色保留 */
   if (out.settings.theme === '#12b7f5') out.settings.theme = '#007AFF';
   /* 拼字卡张数：最少 2 张，范围 2~6，且 max ≥ min（旧数据 mergeMin=1 自动升为 2） */
@@ -1485,12 +1493,15 @@ function mergeState(saved) {
     return role;
   });
 
-  /* 梦角定位：按梦角独立；旧全局定位归到第一个梦角，其余梦角生成默认数据 */
+  /* TA的状态：按梦角独立；旧全局定位归到第一个梦角，其余梦角生成默认数据 */
   out.locations = {};
   const legacyLoc = (src.location && typeof src.location === 'object') ? src.location : null;
   out.roles.forEach((r, i) => {
     const cur = (src.locations && typeof src.locations === 'object') ? src.locations[r.id] : null;
-    out.locations[r.id] = normalizeLocation(cur || (i === 0 ? legacyLoc : null) || randomLocationData());
+    const loc = normalizeLocation(cur || (i === 0 ? legacyLoc : null) || randomLocationData());
+    /* 首次生成（没有旧记录）不占用刷新冷却，让用户进来就能点【一键刷新】 */
+    if (!cur) { loc.lastStatusRefreshTime = 0; loc.refreshedAt = 0; }
+    out.locations[r.id] = loc;
   });
   delete out.location;
   if (!out.roles.some(r => r.id === out.locationRoleId)) out.locationRoleId = out.roles[0].id;
@@ -2448,7 +2459,7 @@ const MANAGE_ENTRIES = [
   { icon: '✉️', name: '信件管理', desc: '写给TA的信，收件人可选', route: 'letters' },
   { icon: '📋', name: '问卷模板管理', desc: '保存、查看、再次发送问卷', route: 'quizzes' },
   { icon: '⏳', name: '一起专注', desc: '专注计时与今日完成记录', route: 'pomodoro' },
-  { icon: '🧭', name: '梦角定位', desc: '方位、距离与正在做什么', route: 'location' },
+  { icon: '🧭', name: 'TA的状态', desc: '健康数据、方位与正在做什么', route: 'status' },
   { icon: '💾', name: '存储感知', desc: '占用估算、备份与清空', route: 'storage' },
   { icon: '🎚️', name: '概率与行为', desc: '回复、拼接、来电与接听概率', route: 'probability' },
   { icon: '⚙️', name: '设置', desc: '我的资料、名称与主题色', route: 'settings' }
@@ -6141,6 +6152,8 @@ const APP_ICONS = {
   gifts: '<svg viewBox="0 0 24 24"><rect x="3.4" y="9.4" width="17.2" height="10.4" rx="1.8"/><path d="M2.6 9.4h18.8v3.4H2.6ZM12 9.4v10.4M12 9.4C10.4 5.2 6.4 5 6.4 7.2c0 1.4 2.6 2.2 5.6 2.2Zm0 0c1.6-4.2 5.6-4.4 5.6-2.2 0 1.4-2.6 2.2-5.6 2.2Z"/></svg>',
   /* 定位：线条风地图图钉 */
   location: '<svg viewBox="0 0 24 24"><path d="M12 21s-6.6-5.4-6.6-10.2A6.6 6.6 0 0 1 12 4.2a6.6 6.6 0 0 1 6.6 6.6C18.6 15.6 12 21 12 21Z"/><circle cx="12" cy="10.8" r="2.4"/></svg>',
+  /* TA的状态：线条风心率 / 脉搏（专属图标，禁用 Emoji） */
+  status: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3.4l1.8-5 3.2 10.2 2.4-7 1.6 3.8H21"/></svg>',
   pat: '<svg viewBox="0 0 24 24"><path d="M9.3 11.6V6.6a1.7 1.7 0 0 1 3.4 0v4.4"/><path d="M12.7 9.2h1.2a1.6 1.6 0 0 1 1.6 1.6v1h.9a1.7 1.7 0 0 1 1.7 1.7v1.9a4.7 4.7 0 0 1-4.7 4.7h-1.9a4.4 4.4 0 0 1-3.5-1.8l-2.7-3.5a1.4 1.4 0 0 1 2.1-1.8l1.9 1.5"/></svg>',
   /* 小游戏：线条风游戏机 */
   games: '<svg viewBox="0 0 24 24"><path d="M7.2 8.4h9.6a4.6 4.6 0 0 1 4.5 5.5l-.6 2.9a2.7 2.7 0 0 1-4.6 1.3l-1.3-1.5a1.7 1.7 0 0 0-1.3-.6h-3a1.7 1.7 0 0 0-1.3.6l-1.3 1.5a2.7 2.7 0 0 1-4.6-1.3l-.6-2.9A4.6 4.6 0 0 1 7.2 8.4Z"/><path d="M8.7 11v3.2M7.1 12.6h3.2"/><circle cx="15.6" cy="11.5" r=".9"/><circle cx="17.5" cy="13.5" r=".9"/></svg>',
@@ -6183,7 +6196,7 @@ const HOME_APPS = [
   { route: 'cards', label: '字卡库' },
   { route: 'stickers', label: '表情包' },
   { route: 'letters', label: '信件' },
-  { route: 'location', label: '梦角定位' },
+  { route: 'status', label: 'TA的状态' },
   { route: 'storage', label: '存储感知' },
   { route: 'probability', label: '概率与行为' },
   { route: 'todo', label: '待办' },
@@ -11820,7 +11833,8 @@ function renderSub(name) {
     case 'quizzes': return renderQuizzesPage();
     case 'quiz-new': return renderQuizNewPage();
     case 'pomodoro': return renderPomodoroPage();
-    case 'location': return renderLocationPage();
+    case 'status': return renderStatusPage();
+    case 'location': return renderCompassPage();
     case 'storage': return renderStoragePage();
     case 'probability': return renderProbabilityPage();
     case 'settings': return renderSettingsPage();
@@ -15788,7 +15802,7 @@ function updatePomoUI() {
 }
 
 /* =========================================================
- * 二十、梦角定位
+ * 二十、TA的状态（健康看板 + 定位指南针）
  * ========================================================= */
 function dirName(bearing) {
   const dirs = ['北', '北东北', '东北', '东东北', '东', '东东南', '东南', '南东南',
@@ -15797,9 +15811,17 @@ function dirName(bearing) {
   return dirs[index];
 }
 
-/* 梦角定位数据：每个梦角各自一份 {bearing,distance,status,activity,updated}。
+/* TA的状态数据：每个梦角各自一份。
+ * 原有定位字段（bearing 方位 / distance 距离 / status 状态 / activity 正在做什么）完整保留；
+ * 新增健康看板字段：
+ *   category      词条分类 still=静止 / light=轻度活动 / heavy=剧烈活动
+ *   steps         今日步数（同一天只累加，跨天重置）
+ *   activeMinutes 今日活动时长（分钟，同一天只累加，跨天重置）
+ *   heartRate / breathRate / bloodOxygen 即时健康数据（每次刷新按分类重新生成）
+ *   statDate      累计数据所属日期 YYYY-MM-DD（防倒流的关键）
+ *   lastStatusRefreshTime 上次刷新时间戳（统一冷却）
  * defaultLocationData：新梦角的固定初始值（正北附近，温和文案）；
- * randomLocationData：随机生成一份，用于“随机刷新”与旧数据缺失时的补默认；
+ * randomLocationData：随机生成一份，用于“一键刷新”与旧数据缺失时的补默认；
  * normalizeLocation：合并补全字段并做范围约束，保证迁移后数据结构完整。 */
 function defaultLocationData() {
   return {
@@ -15807,60 +15829,117 @@ function defaultLocationData() {
     distance: 180,
     status: '在附近',
     activity: '在忙自己的事，偶尔想起你',
+    category: 'still',
+    steps: 0,
+    activeMinutes: 0,
+    heartRate: 68,
+    breathRate: 14,
+    bloodOxygen: 99,
+    statDate: '',
+    lastStatusRefreshTime: 0,
+    refreshedAt: 0,
     updated: Date.now()
   };
 }
-/* 状态 / 正在做什么 词条库：按距离区间分桶，随机刷新时只从距离所属区间抽词，
-   保证文案与距离严格匹配（不再出现 0 米却在车站的错位） */
-const LOC_BUCKETS = [
-  {
-    /* 极近距离：0 ~ 5 米（含 0 米） */
-    min: 0, max: 5,
-    status: ['在你身边', '满眼都是你', '心跳加速'],
-    activity: ['看着你', '牵着你的手', '从背后抱着你', '听你说话', '帮你整理头发']
+/* 定位词条库：三大分类（静止 / 轻度活动 / 剧烈活动），每类自带
+ * 距离区间、即时健康区间、步数与活动时长的累加/基础区间。
+ * 抽词顺序为「先分类 → 再距离 → 再动态」，保证动态与距离互相匹配，
+ * 不会出现 0 米却在跑步之类的乌龙绑定。 */
+const STATUS_CAT_KEYS = ['still', 'light', 'heavy'];
+const STATUS_CAT_NAME = { still: '静止', light: '轻度活动', heavy: '剧烈活动' };
+const STATUS_WORDS = {
+  still: {
+    status: ['很安静', '有点想你', '在放空', '心神安定', '安静地陪着你', '懒懒的'],
+    activity: ['在开会', '在看书', '发呆', '在睡觉', '坐着喝咖啡', '在写东西', '戴着耳机听歌',
+      '在窗边看风景', '在整理明天的计划', '靠在沙发上休息'],
+    distance: [5, 150],
+    hr: [60, 80], rr: [12, 16], spo2: [98, 100],
+    stepAdd: [10, 100], stepBase: [300, 900],
+    minAdd: [0, 2], minBase: [0, 6]
   },
-  {
-    /* 近距离：6 ~ 100 米 */
-    min: 6, max: 100,
-    status: ['在附近', '想见你', '偷偷关注你'],
-    activity: ['在楼下等你', '在隔壁房间', '在小区门口散步', '买水喝', '正在走向你']
+  light: {
+    status: ['心情不错', '在想着你', '有点期待', '轻松自在', '哼着歌'],
+    activity: ['在散步', '在逛超市', '在楼下等你', '在收拾房间', '在做饭', '在买咖啡',
+      '在走去地铁站', '在逛书店', '在浇花', '在遛狗'],
+    distance: [40, 300],
+    hr: [80, 100], rr: [16, 20], spo2: [97, 99],
+    stepAdd: [200, 800], stepBase: [900, 2000],
+    minAdd: [5, 15], minBase: [6, 20]
   },
-  {
-    /* 中距离：101 ~ 300 米 */
-    min: 101, max: 300,
-    status: ['有点想你', '在忙', '挂念你'],
-    activity: ['在附近的咖啡店', '在超市买东西', '在街角散步', '在健身房锻炼']
-  },
-  {
-    /* 远距离：301 ~ 500 米 */
-    min: 301, max: 500,
-    status: ['在忙工作', '有些疲惫', '期待见面'],
-    activity: ['在公司上班', '在通勤的地铁上', '在车站等车', '在开会', '在见客户']
+  heavy: {
+    status: ['气喘吁吁', '很有活力', '在拼尽全力', '心跳很快', '大汗淋漓'],
+    activity: ['在跑步', '在赶路', '在健身', '在打球', '在爬楼梯', '在骑车',
+      '在游泳', '在跳绳', '在做高强度训练', '小跑着来找你'],
+    distance: [120, 500],
+    hr: [110, 150], rr: [20, 30], spo2: [96, 98],
+    stepAdd: [1000, 3000], stepBase: [2000, 4000],
+    minAdd: [10, 30], minBase: [20, 45]
   }
-];
-/* 按距离找到所属区间桶（兜底返回最后一桶，即远距离） */
-function locBucketOf(distance) {
-  for (const b of LOC_BUCKETS) {
-    if (distance >= b.min && distance <= b.max) return b;
-  }
-  return LOC_BUCKETS[LOC_BUCKETS.length - 1];
+};
+function statusWordCat(key) {
+  return STATUS_WORDS[STATUS_CAT_KEYS.includes(String(key)) ? String(key) : 'still'];
 }
-function randomLocationData() {
-  /* 1. 先随机距离：0 ~ 500 米整数 */
-  const distance = randInt(0, 500);
-  /* 2. 按区间抽词：只从该距离所属桶中抽取状态与动态 */
-  const bucket = locBucketOf(distance);
-  let status = pickOne(bucket.status);
-  const activity = pickOne(bucket.activity);
-  /* 3. 特殊绑定：0 米 = 在你身边（强制覆盖状态），动态仍从极近桶抽取 */
-  if (distance === 0) status = '在你身边';
+/* 分类权重：静止 45% / 轻度 35% / 剧烈 20% */
+function pickStatusCategory() {
+  const r = Math.random();
+  if (r < 0.45) return 'still';
+  if (r < 0.80) return 'light';
+  return 'heavy';
+}
+/* 本地日期键 YYYY-MM-DD：用于判断累计数据是否跨天 */
+function statusDateKey(ts) {
+  const d = new Date(Number(ts) || Date.now());
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+}
+
+/* 生成一份全新的状态快照：
+ * 1) 随机分类 → 抽动态与状态词；
+ * 2) 距离与分类匹配（静止类有 35% 概率为 0 米 = 在你身边）；
+ * 3) 即时数据（心率/呼吸/血氧）按分类区间重新生成；
+ * 4) 累计数据（步数/活动时长）比对日期：同一天只在旧值上累加，跨天重置为新的随机基础值。 */
+function generateStatusSnapshot(prev) {
+  const p = (prev && typeof prev === 'object') ? prev : {};
+  const catKey = pickStatusCategory();
+  const cat = statusWordCat(catKey);
+  const today = statusDateKey();
+  const sameDay = String(p.statDate || '') === today;
+
+  /* 距离：与分类匹配，避免文案与距离错位；静止类允许 0 米 */
+  let distance;
+  if (catKey === 'still' && Math.random() < 0.35) distance = 0;
+  else distance = randInt(cat.distance[0], cat.distance[1]);
+  distance = clamp(distance, 0, 500);
+
+  const activity = pickOne(cat.activity);
+  let status = pickOne(cat.status);
+  if (distance === 0) status = '在你身边';   /* 0 米固定显示「在你身边」 */
+
+  /* 累计数据：同一天只增不减；跨天用新的随机基础值 + 本次新增 */
+  const baseSteps = sameDay ? Math.max(0, Number(p.steps) || 0) : randInt(cat.stepBase[0], cat.stepBase[1]);
+  const steps = Math.min(200000, baseSteps + randInt(cat.stepAdd[0], cat.stepAdd[1]));
+  const baseMins = sameDay ? Math.max(0, Number(p.activeMinutes) || 0) : randInt(cat.minBase[0], cat.minBase[1]);
+  const activeMinutes = Math.min(1440, baseMins + randInt(cat.minAdd[0], cat.minAdd[1]));
+
+  const now = Date.now();
   return {
-    bearing: randInt(0, 359),   /* 方位角照常随机 */
+    bearing: randInt(0, 359),
     distance,
     status,
     activity,
-    updated: Date.now()
+    category: catKey,
+    steps,
+    activeMinutes,
+    heartRate: randInt(cat.hr[0], cat.hr[1]),
+    breathRate: randInt(cat.rr[0], cat.rr[1]),
+    bloodOxygen: randInt(cat.spo2[0], cat.spo2[1]),
+    statDate: today,
+    lastStatusRefreshTime: now,
+    refreshedAt: now,       /* 旧字段名保留，供历史备份兼容 */
+    updated: now
   };
+}
+function randomLocationData() {
+  return generateStatusSnapshot(null);
 }
 function normalizeLocation(loc) {
   const d = defaultLocationData();
@@ -15869,11 +15948,26 @@ function normalizeLocation(loc) {
   let dist = parseInt(src.distance, 10);
   if (!Number.isFinite(dist)) dist = d.distance;
   dist = clamp(dist, 0, 500);
+  const intOr = (v, dv, min, max) => {
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? clamp(n, min, max) : dv;
+  };
+  const catKey = STATUS_CAT_KEYS.includes(String(src.category)) ? String(src.category) : 'still';
+  const lastRefresh = Number(src.lastStatusRefreshTime || src.refreshedAt || 0) || 0;
   return {
     bearing: clamp(parseInt(src.bearing, 10), 0, 359) || 0,
     distance: dist,
     status: String(src.status || d.status),
     activity: String(src.activity || d.activity),
+    category: catKey,
+    steps: intOr(src.steps, 0, 0, 200000),
+    activeMinutes: intOr(src.activeMinutes, 0, 0, 1440),
+    heartRate: intOr(src.heartRate, d.heartRate, 40, 200),
+    breathRate: intOr(src.breathRate, d.breathRate, 8, 40),
+    bloodOxygen: intOr(src.bloodOxygen, d.bloodOxygen, 90, 100),
+    statDate: typeof src.statDate === 'string' ? src.statDate : '',
+    lastStatusRefreshTime: lastRefresh,
+    refreshedAt: Number(src.refreshedAt || lastRefresh) || 0,
     updated: Number(src.updated) || Date.now()
   };
 }
@@ -15937,52 +16031,189 @@ function animateCompassNeedle(bearing) {
   }));
 }
 
-/* 定位刷新冷却：按梦角独立，使用上次刷新时间戳计算，切换页面/梦角都不会重置 */
-let locCdTimer = null;
-function locationCooldownLeft(roleId) {
-  const cd = clamp(Math.round(Number(state.settings.locationCooldown ?? 60)), 0, 3600);
-  if (!(cd > 0)) return 0;
+/* ---------- 定点刷新冷却（分钟级，统一由【一键刷新】触发） ---------- */
+let statusCdTimer = null;
+function statusCooldownMins() {
+  const v = Number(state.settings.statusRefreshCooldownMins);
+  return Number.isFinite(v) ? clamp(Math.round(v), 0, 1440) : 5;
+}
+/* 剩余冷却毫秒：按梦角独立，以上次刷新时间戳计算，切换页面/梦角都不会重置 */
+function statusCooldownLeftMs(roleId) {
+  const mins = statusCooldownMins();
+  if (!(mins > 0)) return 0;
   const loc = (state.locations && state.locations[roleId]) || {};
-  const last = Number(loc.refreshedAt || 0);
+  const last = Number(loc.lastStatusRefreshTime || loc.refreshedAt || 0);
   if (!(last > 0)) return 0;
-  const remain = Math.ceil((last + cd * 1000 - Date.now()) / 1000);
+  const remain = last + mins * 60000 - Date.now();
   return remain > 0 ? remain : 0;
 }
-function startLocCooldownTicker(roleId) {
-  if (locCdTimer) { clearInterval(locCdTimer); locCdTimer = null; }
+/* 冷却文案：X分X秒（不足 1 分钟只显示秒） */
+function statusCooldownText(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m > 0 ? (m + '分' + s + '秒') : (s + '秒');
+}
+function startStatusCooldownTicker(roleId) {
+  if (statusCdTimer) { clearInterval(statusCdTimer); statusCdTimer = null; }
   const tick = () => {
-    const btn = $('#locRefresh');
-    if (!btn || currentRoute.page !== 'sub' || currentRoute.name !== 'location') {
-      if (locCdTimer) { clearInterval(locCdTimer); locCdTimer = null; }
+    const btn = $('#stRefresh');
+    if (!btn || currentRoute.page !== 'sub' || currentRoute.name !== 'status') {
+      if (statusCdTimer) { clearInterval(statusCdTimer); statusCdTimer = null; }
       return;
     }
-    const left = locationCooldownLeft(roleId);
+    const left = statusCooldownLeftMs(roleId);
     if (left > 0) {
       btn.classList.add('cooling');
-      btn.textContent = '冷却中 ' + left + 's';
+      btn.textContent = '冷却中 ' + statusCooldownText(left);
     } else {
       btn.classList.remove('cooling');
-      btn.textContent = '随机刷新';
+      btn.textContent = '一键刷新';
     }
   };
   tick();
-  locCdTimer = setInterval(tick, 1000);
+  statusCdTimer = setInterval(tick, 1000);
 }
 
-function renderLocationPage() {
-  /* 当前选中的梦角：默认上次选中（持久化于 state.locationRoleId），缺失时回落第一个 */
+/* 昨夜睡眠：只读取「一起睡觉」的真实记录；没有任何记录时返回 0（UI 显示「暂未记录」），绝不随机生成 */
+function lastNightSleepMs() {
+  const hist = (state.sleep && Array.isArray(state.sleep.history)) ? state.sleep.history : [];
+  const cutoff = Date.now() - 30 * 3600 * 1000;
+  const cand = hist
+    .filter(r => r && Number(r.endTime) >= cutoff && Number(r.duration) > 0)
+    .sort((a, b) => Number(b.endTime) - Number(a.endTime))[0];
+  if (cand) return Number(cand.duration);
+  /* 结算卡已填但还没落历史时，也认这份 pending */
+  const pend = state.sleep && state.sleep.pendingSleepData;
+  if (pend && Number(pend.duration) > 0) return Number(pend.duration);
+  return 0;
+}
+
+/* 千分位格式化：今日步数等大数字更易读 */
+function statusFmtNum(n) {
+  return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/* 旧存档补数据 / 跨天滚动：没有日期、日期不是今天或缺少步数时，
+ * 生成一份当天的基础快照（跨天重置，不会把昨天的累计带过来）。
+ * 首次生成不占用刷新冷却（时间戳归零），用户进来即可点【一键刷新】 */
+function ensureStatusData(roleId) {
+  const rec = state.locations && state.locations[roleId];
+  const today = statusDateKey();
+  if (!rec || rec.statDate !== today || !Number.isFinite(Number(rec.steps))) {
+    const fresh = generateStatusSnapshot(rec && rec.statDate === today ? rec : null);
+    fresh.lastStatusRefreshTime = 0;
+    fresh.refreshedAt = 0;
+    state.locations[roleId] = fresh;
+    persist();
+    return fresh;
+  }
+  return rec;
+}
+
+/* =========================================================
+ * TA的状态：健康看板（主页面）
+ * ========================================================= */
+function statusRoleResolve() {
   let role = roleById(state.locationRoleId) || state.roles[0];
-  if (!role) { subShell('梦角定位', '<div class="list-tip">还没有梦角，先去联系人页添加一位吧。</div>'); return; }
+  if (!role) return null;
   if (role.id !== state.locationRoleId) { state.locationRoleId = role.id; persist(); }
-  if (!state.locations[role.id]) { state.locations[role.id] = randomLocationData(); persist(); }
-  const loc = state.locations[role.id];
+  return role;
+}
+
+/* 单个健康数据卡 */
+function statusCellHTML(label, value, unit, extraClass) {
+  return `<div class="st-cell">
+    <div class="st-k">${label}</div>
+    <div class="st-v ${extraClass || ''}">${value}${unit ? `<span class="st-u">${unit}</span>` : ''}</div>
+  </div>`;
+}
+
+function renderStatusPage() {
+  const role = statusRoleResolve();
+  if (!role) { subShell('TA的状态', '<div class="list-tip">还没有梦角，先去联系人页添加一位吧。</div>'); return; }
+  const loc = ensureStatusData(role.id);
+  const bearing = Number(loc.bearing) || 0;
+  const dir = dirName(bearing);
+  const distZero = Math.round(Number(loc.distance) || 0) === 0;
+  const statusDisplay = distZero ? '在你身边' : loc.status;
+  const catName = STATUS_CAT_NAME[loc.category] || '静止';
+
+  /* 行走距离：以累计步数为唯一来源（1000 步 ≈ 0.7 公里），不单独随机，避免与步数矛盾 */
+  const km = (Math.max(0, Number(loc.steps) || 0) / 1000 * 0.7).toFixed(2);
+  const sleepMs = lastNightSleepMs();
+  const sleepHTML = sleepMs > 0
+    ? sleepDurationText(sleepMs)
+    : '<span class="st-pending">暂未记录</span>';
+
+  const body = subShell('TA的状态', `
+    ${roleStripHTML(role.id)}
+    <div class="st-hero">
+      <div class="st-hero-top">
+        <span class="st-hero-name">${esc(role.name)}</span>
+        <span class="st-cat">${esc(catName)}</span>
+      </div>
+      <div class="st-hero-main">${esc(loc.activity)}</div>
+      <div class="st-hero-sub">${esc(statusDisplay)} · ${distZero ? '0 米' : Math.round(Number(loc.distance) || 0) + ' 米'} · ${esc(dir)}</div>
+    </div>
+    <div class="st-board">
+      <div class="st-board-head">
+        <div class="st-board-title">今日健康</div>
+        <div class="st-board-date">${esc(todayLabel())}</div>
+      </div>
+      <div class="st-grid">
+        ${statusCellHTML('今日步数', statusFmtNum(loc.steps), '步')}
+        ${statusCellHTML('行走距离', km, '公里')}
+        ${statusCellHTML('心率', Math.round(Number(loc.heartRate) || 0), 'bpm')}
+        ${statusCellHTML('活动时长', Math.round(Number(loc.activeMinutes) || 0), '分钟')}
+        ${statusCellHTML('昨夜睡眠', sleepHTML, '')}
+        ${statusCellHTML('血氧', Math.round(Number(loc.bloodOxygen) || 0), '%')}
+        ${statusCellHTML('呼吸频率', Math.round(Number(loc.breathRate) || 0), '次/分')}
+      </div>
+    </div>
+    <button class="btn primary st-loc-btn" id="stGoLoc" type="button">查看 TA 的定位</button>
+    <div class="tip-box" style="margin-top:12px">健康数据为本地模拟，仅用于陪伴氛围；其中「昨夜睡眠」只读取【一起睡觉】的真实记录，没有记录时显示「暂未记录」，不会随机生成。</div>
+  `, `<button class="st-refresh-btn" id="stRefresh" type="button">一键刷新</button>`);
+
+  /* 切换梦角：持久化选中并重绘（各梦角数据互相独立） */
+  $$('.role-strip [data-rspick]', body).forEach(btn => btn.addEventListener('click', () => {
+    if (btn.dataset.rspick === state.locationRoleId) return;
+    state.locationRoleId = btn.dataset.rspick;
+    persist();
+    renderStatusPage();
+  }));
+
+  /* 一键刷新：冷却中以分钟计，未冷却则重新生成状态 + 累加今日数据 */
+  startStatusCooldownTicker(role.id);
+  $('#stRefresh').addEventListener('click', () => {
+    const left = statusCooldownLeftMs(role.id);
+    if (left > 0) {
+      showToast('刷新冷却中，还需等待 ' + statusCooldownText(left));
+      return;
+    }
+    state.locations[role.id] = generateStatusSnapshot(state.locations[role.id]);
+    persist();
+    renderStatusPage();
+    showToast('已刷新');
+  });
+
+  $('#stGoLoc').addEventListener('click', () => navigate({ page: 'sub', name: 'location' }));
+}
+
+/* =========================================================
+ * TA的定位：指南针页（仅展示，刷新统一在上层看板）
+ * ========================================================= */
+function renderCompassPage() {
+  const role = statusRoleResolve();
+  if (!role) { subShell('TA的定位', '<div class="list-tip">还没有梦角，先去联系人页添加一位吧。</div>'); return; }
+  const loc = ensureStatusData(role.id);
   const bearing = Number(loc.bearing) || 0;
   const dir = dirName(bearing);
   /* 距离为 0 米时只把状态字段显示为「在你身边」；距离字段仍显示「0 米」，互不替代 */
-  const distZero = Math.round(loc.distance) === 0;
+  const distZero = Math.round(Number(loc.distance) || 0) === 0;
   const statusDisplay = distZero ? '在你身边' : loc.status;
 
-  subShell('梦角定位', `
+  subShell('TA的定位', `
     ${roleStripHTML(role.id)}
     <div class="panel" style="padding-top:4px">
       <div class="compass-box">${compassSVG(bearing)}</div>
@@ -15990,42 +16221,31 @@ function renderLocationPage() {
     </div>
     <div class="data-grid">
       <div class="data-cell"><div class="k">方位</div><div class="v">${esc(dir)}</div></div>
-      <div class="data-cell"><div class="k">距离</div><div class="v">${Math.round(loc.distance)} 米</div></div>
+      <div class="data-cell"><div class="k">距离</div><div class="v">${Math.round(Number(loc.distance) || 0)} 米</div></div>
       <div class="data-cell"><div class="k">状态</div><div class="v" style="font-size:15px">${esc(statusDisplay)}</div></div>
       <div class="data-cell"><div class="k">正在做什么</div><div class="v" style="font-size:13px;line-height:1.5">${esc(loc.activity)}</div></div>
     </div>
     <div class="btn-row">
-      <button class="btn primary" style="flex:1" id="locRefresh">随机刷新</button>
       <button class="btn" style="flex:1" id="locEdit">手动编辑</button>
     </div>
-    <div class="tip-box" style="margin-top:12px">每个梦角都有独立的方位与动态；定位为本地模拟数据，用于陪伴氛围，不会获取你的真实地理位置。</div>`);
+    <div class="tip-box" style="margin-top:12px">每个梦角都有独立的方位与动态；此页仅作展示，刷新请回到【TA的状态】使用【一键刷新】。定位为本地模拟数据，不会获取你的真实地理位置。</div>`);
 
   animateCompassNeedle(bearing);
-  startLocCooldownTicker(role.id);
 
   /* 切换梦角：持久化选中并立即重渲染（指针按各自方位角平滑转过去） */
   $$('.role-strip [data-rspick]').forEach(btn => btn.addEventListener('click', () => {
     if (btn.dataset.rspick === state.locationRoleId) return;
     state.locationRoleId = btn.dataset.rspick;
     persist();
-    renderLocationPage();
+    renderCompassPage();
   }));
 
-  $('#locRefresh').addEventListener('click', () => {
-    const left = locationCooldownLeft(role.id);
-    if (left > 0) { showToast('定位刷新冷却中，还需等待 ' + left + ' 秒'); return; }
-    state.locations[role.id] = Object.assign(randomLocationData(), { refreshedAt: Date.now() });
-    persist();
-    renderLocationPage();
-    showToast('已刷新定位');
-  });
-
   $('#locEdit').addEventListener('click', () => {
-    const modal = showModal({
+    showModal({
       title: `编辑 ${role.name} 的定位`,
       body: `
         <div class="field"><label>方位角（0~359°）</label><input class="input" id="locBearing" type="number" min="0" max="359" value="${Math.round(bearing)}"></div>
-        <div class="field"><label>距离（0~500 米，0 米显示「在你身边」）</label><input class="input" id="locDistance" type="number" min="0" max="500" value="${Math.round(loc.distance)}"></div>
+        <div class="field"><label>距离（0~500 米，0 米显示「在你身边」）</label><input class="input" id="locDistance" type="number" min="0" max="500" value="${Math.round(Number(loc.distance) || 0)}"></div>
         <div class="field"><label>状态</label><input class="input" id="locStatus" value="${esc(loc.status)}"></div>
         <div class="field"><label>正在做什么</label><input class="input" id="locActivity" value="${esc(loc.activity)}"></div>`,
       actions: [
@@ -16037,24 +16257,22 @@ function renderLocationPage() {
               showToast('距离需在 0~500 米之间');
               return false;
             }
-            state.locations[role.id] = {
+            /* 只在原记录上改定位字段：健康数据、累计步数与刷新时间戳原样保留 */
+            state.locations[role.id] = Object.assign({}, state.locations[role.id], {
               bearing: clamp(parseInt($('#locBearing', el).value, 10) || 0, 0, 359),
               distance: clamp(rawDist, 0, 500),
               status: $('#locStatus', el).value.trim() || '在附近',
               activity: $('#locActivity', el).value.trim() || '在忙自己的事',
-              /* 手动编辑不受冷却限制，但保留上次刷新时间戳，避免借编辑绕过冷却 */
-              refreshedAt: Number(loc.refreshedAt || 0),
               updated: Date.now()
-            };
+            });
             persist();
-            renderLocationPage();
+            renderCompassPage();
             showToast('定位已保存');
             return true;
           }
         }
       ]
     });
-    return modal;
   });
 }
 
@@ -16486,7 +16704,7 @@ const PROB_SECTIONS = [
   { name: '聊天互动', id: 'section-chat' },
   { name: '语音来电', id: 'section-call' },
   { name: '转账礼物', id: 'section-transfer' },
-  { name: '梦角定位', id: 'section-location' },
+  { name: 'TA的状态', id: 'section-location' },
   { name: '留影时刻', id: 'section-moment' },
   { name: '主动回复', id: 'section-proactive' },
   { name: '一起专注', id: 'section-focus' },
@@ -16593,8 +16811,8 @@ function renderProbabilityPage() {
       <div class="muted" style="font-size:12px;line-height:1.6;margin-top:6px">链接测试中，${dn} 会在每题的选项里完全随机作答，不设正确率参数。</div>
     </div>
     <div class="panel" id="section-location">
-      <div class="panel-title">梦角定位</div>
-      ${sliderRowHTML('定位刷新冷却时间', '每次随机刷新后需等待的秒数；0 表示不限制，最长 3600 秒，每个梦角独立计算', 'locationCooldown', s.locationCooldown, 0, 3600, '秒')}
+      <div class="panel-title">TA的状态</div>
+      ${sliderRowHTML('TA的状态刷新时长', '每次点击【一键刷新】后需等待的分钟数；0 表示不限制，最长 1440 分钟（1 天），每个梦角独立计算', 'statusRefreshCooldownMins', s.statusRefreshCooldownMins, 0, 1440, '分钟')}
     </div>
     <div class="panel" id="section-moment">
       <div class="panel-title">留影时刻</div>
@@ -16679,7 +16897,7 @@ function renderProbabilityPage() {
   bindProbSlider('taVoiceChance', 'taVoiceChanceRange', 'taVoiceChanceNum', 0, 100);
   /* TA 发心情卡片概率：同样实时写回 settings.taMoodChance 并立即保存 */
   bindProbSlider('taMoodChance', 'taMoodChanceRange', 'taMoodChanceNum', 0, 100);
-  bindProbSlider('locationCooldown', 'locationCooldownRange', 'locationCooldownNum', 0, 3600);
+  bindProbSlider('statusRefreshCooldownMins', 'statusRefreshCooldownMinsRange', 'statusRefreshCooldownMinsNum', 0, 1440);
   bindProbSlider('mergeChance', 'mergeChanceRange', 'mergeChanceNum', 0, 100);
   bindProbSlider('mergeMin', 'mergeMinRange', 'mergeMinNum', 2, 6);
   bindProbSlider('mergeMax', 'mergeMaxRange', 'mergeMaxNum', 2, 6);
@@ -18433,10 +18651,22 @@ function showSleepSummary() {
     <div class="sl-sum-card">
       <div class="sl-sum-icon">${APP_ICONS.sleep}</div>
       <div class="sl-sum-text">你们一共一起睡了<br><b>${esc(sleepDurationText(rec.duration))}</b></div>
+      <div class="sl-feel-wrap">
+        <textarea class="sl-feel-input" id="slFeelInput" rows="2" maxlength="300" placeholder="这一觉睡得怎么样……">${esc(rec.feeling || '')}</textarea>
+        <button class="sl-feel-save" id="slFeelSave" type="button">保存感受</button>
+      </div>
       <button class="sl-primary" id="sleepViewTimeline" type="button">查看 TA 的睡眠记录</button>
     </div>
   `;
   m.classList.remove('hidden');
+  /* 保存感受：写回 pendingSleepData.feeling，立即持久化，不影响后续「查看时间轴 → 保存退出」流程 */
+  $('#slFeelSave', m).addEventListener('click', () => {
+    const val = String(($('#slFeelInput', m) || {}).value || '').trim().slice(0, 300);
+    rec.feeling = val;
+    state.sleep.pendingSleepData = rec;   /* 确保 pending 指向更新后的 rec（同一引用，但保险起见） */
+    persist();
+    showToast('感受已保存');
+  });
   $('#sleepViewTimeline', m).addEventListener('click', () => {
     /* 结算卡 → 时间轴：清 pendingSummary，pendingSleepData 留到「保存并退出」再入历史 */
     state.sleep.pendingSummary = false;
@@ -18727,18 +18957,22 @@ function renderSleepPage() {
         <div class="sl-set-hint">到达设定时间后，将自动进入睡眠模式。如切到其他 APP，将收到通知提醒。</div>
       </div>
       <div class="sl-hist-head">历史睡眠记录</div>
-      ${hist.length ? `<div class="sl-hist">${hist.map(r => `
+      ${hist.length ? `<div class="sl-hist">${hist.map(r => {
+        const feel = (r.feeling || '').trim();
+        return `
         <div class="sl-hist-item" data-sl-hist="${esc(r.id)}">
           <div class="sl-hist-ic">${APP_ICONS.sleep}</div>
           <div class="sl-hist-main">
             <div class="sl-hist-date">${esc(sleepDayLabel(r.startTime))}</div>
             <div class="sl-hist-dur">${esc(fmtClock(r.startTime))} - ${esc(fmtClock(r.endTime))} · ${esc(sleepDurationText(r.duration))}</div>
+            ${feel ? `<div class="sl-hist-feel-wrap"><div class="sl-hist-feel">${esc(feel)}</div><button class="sl-feel-del" data-sl-feel-del="${esc(r.id)}" type="button" aria-label="删除感受"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></button></div>` : ''}
           </div>
           <div class="arrow">›</div>
           <button class="sl-hist-del" data-sl-del="${esc(r.id)}" type="button" aria-label="删除这条记录">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
           </button>
-        </div>`).join('')}</div>`
+        </div>`;
+      }).join('')}</div>`
       : '<div class="sl-empty">还没有睡眠记录，今晚一起睡一觉吧。</div>'}
     </div>
   `);
@@ -18761,7 +18995,20 @@ function renderSleepPage() {
       sl.history = sl.history.filter(x => x.id !== id);
       persist(true);         /* IndexedDB 立即落盘：刷新后不会复活 */
       showToast('已删除这条睡眠记录');
-      renderSleepPage();     /* 重新渲染列表：删光了就显示“还没有睡眠记录” */
+      renderSleepPage();
+    }));
+    /* 历史记录：仅删除感受文字（保留睡眠记录本身，二次确认 → 清空 feeling → 落盘 → 重新渲染） */
+    $$('[data-sl-feel-del]', body).forEach(b => b.addEventListener('click', async e => {
+      e.stopPropagation();
+      const id = b.dataset.slFeelDel;
+      const ok = await confirmDialog('删除感受', '确定要删除这条感受文字吗？', '删除', true);
+      if (!ok) return;
+      const sl = state.sleep;
+      if (!sl || !Array.isArray(sl.history)) return;
+      sl.history.forEach(x => { if (x.id === id) x.feeling = ''; });
+      persist(true);
+      showToast('感受已删除');
+      renderSleepPage();
     }));
     /* 定时强制睡眠：夜间 / 午睡两组独立设置，开关与时间实时保存；关闭时时间置灰 */
     const schedCfg = [
@@ -20480,4 +20727,5 @@ if (document.readyState === 'loading') {
 } else {
   safeBoot();
 }
+
 
