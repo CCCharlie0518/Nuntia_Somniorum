@@ -16238,9 +16238,9 @@ function renderBadmintonPage() {
   const cfg = BDM_MODES[bdm.mode] || BDM_MODES.pet;
   const body = subShell('赛博羽毛球', `
     <div class="bdm-wrap">
-      <div class="bdm-modes">
+      <div class="bdm-modes badminton-modes">
         ${Object.keys(BDM_MODES).map(k =>
-          `<button class="bdm-mode ${bdm.mode === k ? 'active' : ''}" data-bdmmode="${k}">${BDM_MODES[k].label}</button>`).join('')}
+          `<button class="bdm-mode mode-btn ${bdm.mode === k ? 'active' : ''}" data-bdmmode="${k}">${BDM_MODES[k].label}</button>`).join('')}
       </div>
       <div class="bdm-ta">
         <span class="gmk-ava">${role ? roleAvatarHTML(role, 30) : avatarHTML('🙂', 30)}</span>
@@ -19601,7 +19601,7 @@ function renderHomeRoomPage(roomKey) {
   let entries = [];
   if (room.key === 'living') {
     entries = [
-      { icon: APP_ICONS.games, title: '游戏机', desc: '五子棋 · 更多小游戏筹备中', route: 'play' },
+      { icon: APP_ICONS.games, title: '游戏机', desc: '五子棋 · 赛博羽毛球', route: 'play' },
       { icon: APP_ICONS.listen, title: '留声机', desc: musicIsPlaying() ? `正在听《${esc(musicDisplayName())}》 · 点击继续` : `和 ${roleName} 一起听一首歌，慢慢待在彼此身边`, route: 'listen' }
     ];
   } else if (room.key === 'bedroom') {

@@ -1634,6 +1634,44 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
 .gmk-result-actions{display:flex;gap:8px;width:100%;}
 .gmk-result-actions .gmk-opt{flex:1;padding:8px 0;border:none;border-radius:10px;background:#F2F2F7;font-size:13px;color:#3C3C43;cursor:pointer;}
 .gmk-result-actions #gmkAgain{background:var(--primary);color:#fff;}
+/* ===== 赛博羽毛球 ===== */
+.bdm-wrap{display:flex;flex-direction:column;gap:8px;padding:2px 0 10px;box-sizing:border-box;min-height:calc(100dvh - 220px);}
+.bdm-modes{display:flex;gap:8px;flex-shrink:0;}
+.bdm-mode{flex:1;padding:7px 0;border-radius:999px;border:1px solid #2a3648;background:rgba(12,20,32,.9);color:#9fb3cc;font-size:12.5px;font-weight:600;transition:border-color .18s ease,color .18s ease,background-color .18s ease,box-shadow .18s ease;}
+.bdm-mode.active{border-color:#2de2ff;color:#8ff4ff;background:rgba(45,226,255,.12);box-shadow:0 0 12px rgba(45,226,255,.25);}
+/* 移动端模式按钮：强制 Flex 并排居中，禁止换行/压缩变形。
+   容器挂 badminton-modes，按钮挂 mode-btn（与页面上已有的 bdm-mode 共存）。 */
+.badminton-modes{display:flex;justify-content:center;align-items:center;gap:10px;width:100%;padding:6px 2px;box-sizing:border-box;}
+.mode-btn{
+  flex:1 1 0;min-width:0;max-width:100px;
+  padding:8px 12px;border-radius:20px;
+  background-color:rgba(12,20,32,.9);color:#9fb3cc;
+  font-size:14px;line-height:1.2;text-align:center;white-space:nowrap;
+  border:1px solid #2a3648;cursor:pointer;
+  touch-action:manipulation;-webkit-tap-highlight-color:transparent;
+}
+.mode-btn.active{background-color:rgba(45,226,255,.14);color:#8ff4ff;border-color:#2de2ff;font-weight:600;}
+@media (max-width:359px){
+  .badminton-modes{gap:6px;}
+  .mode-btn{padding:7px 6px;font-size:12px;}
+}
+.bdm-ta{display:flex;align-items:flex-start;gap:8px;min-height:30px;flex-shrink:0;}
+.bdm-ta .gmk-bubble{background:#101c2c;border-color:rgba(45,226,255,.25);color:#d8f7ff;}
+.bdm-stage{position:relative;flex:1 1 auto;min-height:420px;border-radius:18px;overflow:hidden;background:#070c14;border:1px solid rgba(45,226,255,.18);box-shadow:0 10px 30px rgba(4,10,18,.5);}
+#badmintonCanvas{display:block;width:100%;height:100%;touch-action:none;cursor:crosshair;}
+.bdm-score{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:3;display:flex;align-items:center;gap:7px;padding:5px 14px;border-radius:999px;background:rgba(6,12,20,.72);border:1px solid rgba(45,226,255,.28);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);font-size:12px;color:#9fb3cc;letter-spacing:.3px;pointer-events:none;}
+.bdm-score b{font-size:16px;color:#8ff4ff;font-weight:700;}
+.bdm-score i{font-style:normal;color:#3d556e;}
+.bdm-tip{flex-shrink:0;text-align:center;font-size:11px;color:#6c7c92;line-height:1.5;}
+.bdm-overlay{position:absolute;inset:0;z-index:4;display:flex;align-items:center;justify-content:center;background:rgba(4,9,16,.62);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);opacity:0;visibility:hidden;transition:opacity .22s ease,visibility .22s ease;}
+.bdm-overlay.show{opacity:1;visibility:visible;}
+.bdm-card{width:78%;max-width:300px;background:rgba(12,22,36,.95);border:1px solid rgba(45,226,255,.3);border-radius:18px;padding:18px 16px 14px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:8px;box-shadow:0 16px 40px rgba(0,0,0,.5);}
+.bdm-card .t{font-size:16px;font-weight:700;color:#8ff4ff;}
+.bdm-card .sc{font-size:11.5px;color:#7b8fa6;letter-spacing:.4px;}
+.bdm-card .s{font-size:13px;color:#c8d8ea;line-height:1.65;}
+.bdm-actions{display:flex;gap:8px;width:100%;margin-top:4px;}
+.bdm-actions button{flex:1;padding:9px 0;border-radius:10px;font-size:13px;font-weight:600;background:#16222f;color:#a8bdd2;cursor:pointer;}
+.bdm-actions #bdmRestart{background:#2de2ff;color:#04121a;}
 /* 记账：收支选择面板与列表标签 */
 .ledger-pick{display:flex;gap:10px;}
 .ledger-pick button{flex:1;padding:14px 0 12px;border-radius:14px;border:1px solid #E5E5EA;background:#fff;font-size:14px;font-weight:600;color:#1C1C1E;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:5px;transition:border-color .18s ease,background-color .18s ease;}
