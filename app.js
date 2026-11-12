@@ -19927,19 +19927,39 @@ function homeExpandPot() {
 }
 
 /* ---------- 浇水模式与 10 分钟冷却 ---------- */
-let blWatering = false;
+let isWatering = false;
 let blWaterTimer = 0;
 let blWaterCursorEl = null;
 function homeStopBalconyTimer() {
   if (blWaterTimer) { clearInterval(blWaterTimer); blWaterTimer = 0; }
-  blWatering = false;
+  isWatering = false;
   if (blWaterCursorEl && blWaterCursorEl.parentNode) blWaterCursorEl.parentNode.removeChild(blWaterCursorEl);
   blWaterCursorEl = null;
   document.body.classList.remove('bl-watering');
+  /* 离开阳台时清掉滚动区额外内边距与固定栏偏移，避免污染其它子页面布局 */
+  const sb = document.getElementById('subBody');
+  if (sb) sb.classList.remove('has-bl-waterdock');
+  document.documentElement.style.removeProperty('--bl-bar-bottom');
+}
+/* 底部浇水栏 fixed 在视口底部，但必须让开底部 Tab 栏与桌面端留白：
+ * 用 --bl-bar-bottom 记录「视口底部 → Tab 栏顶部」的距离，窗口变化时重新计算。 */
+let blResizeBound = false;
+function homeSyncWaterBarOffset() {
+  const tabbar = document.getElementById('tabbar');
+  let off = 0;
+  if (tabbar && tabbar.offsetParent !== null) {
+    off = Math.max(0, Math.round(window.innerHeight - tabbar.getBoundingClientRect().top));
+  }
+  document.documentElement.style.setProperty('--bl-bar-bottom', off + 'px');
+  if (!blResizeBound) {
+    blResizeBound = true;
+    window.addEventListener('resize', () => {
+      if (currentRoute && currentRoute.page === 'sub' && currentRoute.name === 'homebalcony') homeSyncWaterBarOffset();
+    });
+  }
 }
 /* 每盆植物独立冷却：距上次浇水满 10 分钟才可再浇 */
-function homePlantCooldownLeft(p) {
-  if (!p) return 0;
+function homePlantCooldownLeft(p) {  if (!p) return 0;
   const last = Number(p.lastWateredTime) || 0;
   return Math.max(0, last + HOME_WATER_COOLDOWN_MS - Date.now());
 }
@@ -19948,8 +19968,8 @@ function homeSyncWaterButton(body) {
   const btn = $('[data-bl-waterbtn]', body || document);
   if (!btn) return;
   btn.disabled = false;
-  btn.classList.toggle('watering', blWatering);
-  btn.textContent = blWatering ? '浇水模式中...（点花盆浇水）' : '💧 浇水';
+  btn.classList.toggle('watering', isWatering);
+  btn.textContent = isWatering ? '浇水模式中...（点花盆浇水）' : '💧 浇水';
 }
 /* 刷新每盆卡片里的冷却倒计时文字 */
 function homeSyncPotCooldowns(body) {
@@ -19963,7 +19983,7 @@ function homeSyncPotCooldowns(body) {
 }
 /* 退出浇水模式：移除水壶跟随图标与高亮 */
 function homeExitWaterMode() {
-  blWatering = false;
+  isWatering = false;
   document.body.classList.remove('bl-watering');
   if (blWaterCursorEl && blWaterCursorEl.parentNode) blWaterCursorEl.parentNode.removeChild(blWaterCursorEl);
   blWaterCursorEl = null;
@@ -19989,7 +20009,7 @@ function homeWaterPotNow(idx) {
   renderBalconyPage();
 }
 function homeStartWaterMode(body) {
-  blWatering = true;
+  isWatering = true;
   document.body.classList.add('bl-watering');
   $$('.bl-slot.has-plant', body).forEach(el => el.classList.add('watering-target'));
   homeSyncWaterButton(body);
@@ -20001,7 +20021,7 @@ function homeStartWaterMode(body) {
     document.body.appendChild(blWaterCursorEl);
   }
   const follow = e => {
-    if (!blWatering || !blWaterCursorEl) return;
+    if (!isWatering || !blWaterCursorEl) return;
     const t = e.touches && e.touches[0] ? e.touches[0] : e;
     blWaterCursorEl.style.left = (t.clientX || 0) + 'px';
     blWaterCursorEl.style.top = (t.clientY || 0) + 'px';
@@ -20153,28 +20173,41 @@ function renderBalconyPage() {
       <div class="bl-grid">${cards}${expand}</div>
       <div class="bl-hint">水分每小时蒸发 5%，低于 20% 会停止生长。花盆最多扩建到 ${HOME_POT_MAX} 个。</div>
     </div>
-    <div class="bl-waterbar">
+    <div class="bl-waterdock">
       <button class="bl-waterbtn" data-bl-waterbtn>💧 浇水</button>
       <div class="bl-watertip">点「浇水」后选择花盆 · 每盆独立冷却 10 分钟</div>
     </div>`);
   homeExitWaterMode();
   homeSyncWaterButton(body);
+  body.classList.add('has-bl-waterdock');   /* 给滚动区留出底部安全空间 */
+  homeSyncWaterBarOffset();                 /* 固定栏避开底部 Tab 栏 */
 
   $$('[data-bl-plant]', body).forEach(btn => btn.addEventListener('click', () => homeOpenSeedPicker(btn.dataset.blPlant)));
   $$('[data-bl-pick]', body).forEach(btn => btn.addEventListener('click', e => {
     e.stopPropagation();
     homeHarvestPlant(btn.dataset.blPick);
   }));
-  $$('[data-bl-pot]', body).forEach(card => card.addEventListener('click', () => {
-    if (blWatering) homeWaterPotNow(card.dataset.blPot);
+  $$('[data-bl-pot]', body).forEach(card => card.addEventListener('click', e => {
+    e.stopPropagation();               /* 阻止冒泡到空白取消逻辑 */
+    if (isWatering) homeWaterPotNow(card.dataset.blPot);
   }));
   const expandBtn = $('[data-bl-expand]', body);
   if (expandBtn) expandBtn.addEventListener('click', homeExpandPot);
   const waterBtn = $('[data-bl-waterbtn]', body);
-  if (waterBtn) waterBtn.addEventListener('click', () => {
-    if (blWatering) { homeExitWaterMode(); return; }
+  if (waterBtn) waterBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    if (isWatering) { homeExitWaterMode(); return; }
     homeStartWaterMode(body);
   });
+  /* 点击空白处（非花盆 / 非浇水按钮 / 非底部栏）取消浇水模式 */
+  if (!body.dataset.blBlankBound) {
+    body.dataset.blBlankBound = '1';
+    body.addEventListener('click', e => {
+      if (!isWatering) return;
+      if (e.target.closest('[data-bl-pot],[data-bl-waterbtn],[data-bl-plant],[data-bl-pick],[data-bl-expand],.bl-waterdock,.modal-overlay')) return;
+      homeExitWaterMode();
+    });
+  }
   /* 每秒刷新各花盆的独立冷却倒计时，归零后自动显示「可以浇水啦」 */
   if (blWaterTimer) { clearInterval(blWaterTimer); blWaterTimer = 0; }
   blWaterTimer = setInterval(() => {
@@ -23431,15 +23464,24 @@ function runSplash() {
   const content = $('#splash-content');
   const loading = $('#splash-loading');
 
+  /* 防死锁兜底：正常时序 4.1 秒结束；若其它回调异常，5 秒后强制移除遮罩 */
   setTimeout(() => {
-    if (loading) loading.classList.add('splash-out');   /* 加载文字淡出 */
-    if (content) content.classList.add('show');         /* 浮现区上浮显现 */
-  }, 1500);
+    try { screen.style.display = 'none'; } catch (e) { /* 忽略 */ }
+  }, 5000);
 
-  setTimeout(() => {
-    screen.classList.add('splash-fade');                /* 整个遮罩淡出 */
-    setTimeout(() => { screen.style.display = 'none'; }, 600);
-  }, 3500);
+  try {
+    setTimeout(() => {
+      if (loading) loading.classList.add('splash-out');   /* 加载文字淡出 */
+      if (content) content.classList.add('show');         /* 浮现区上浮显现 */
+    }, 1500);
+
+    setTimeout(() => {
+      screen.classList.add('splash-fade');                /* 整个遮罩淡出 */
+      setTimeout(() => { screen.style.display = 'none'; }, 600);
+    }, 3500);
+  } catch (e) {
+    screen.style.display = 'none';
+  }
 }
 
 /* 立即启动开屏动画；defer 加载保证此时 DOM 已就绪 */
@@ -23448,12 +23490,26 @@ runSplash();
 /* 页面加载完成即启动：DOMContentLoaded 后立刻补查一次主动来信等任务，刷新不丢。
    用 safeBoot 包一层：初始化里任何一处抛异常（含一起睡觉等新功能）都只记录日志，
    绝不让异常外泄 —— 开屏动画由 runSplash 独立计时，因此桌面一定能进入 */
+/* 初始化失败兜底：强制移除开屏遮罩并回到首页骨架，
+ * 即使某个模块（如阳台）抛错，也绝不出现整站白屏、遮罩卡死 */
+function recoverFromBootFailure(err) {
+  console.error('[boot] 初始化失败：', err);
+  try {
+    const splash = document.getElementById('splash-screen');
+    if (splash) splash.style.display = 'none';
+    const sheets = document.querySelectorAll('.page');
+    sheets.forEach(p => p.classList.remove('active'));
+    const home = document.getElementById('page-home');
+    if (home) home.classList.add('active');
+  } catch (e) { /* 兜底里再出错也不外抛 */ }
+}
+
 function safeBoot() {
   try {
     const p = boot();
-    if (p && typeof p.catch === 'function') p.catch(e => console.error('[boot] 初始化失败：', e));
+    if (p && typeof p.catch === 'function') p.catch(recoverFromBootFailure);
   } catch (e) {
-    console.error('[boot] 初始化失败：', e);
+    recoverFromBootFailure(e);
   }
 }
 if (document.readyState === 'loading') {

@@ -1156,7 +1156,7 @@ input[type=range]::-webkit-slider-thumb{
 .actionsheet .sheet-item:active{background:#f6f7f9;}
 .actionsheet .sheet-cancel{width:100%;padding:14px;background:#fff;border-radius:14px;font-size:15px;font-weight:600;}
 .toast{
-  position:fixed;left:50%;bottom:86px;transform:translate(-50%,14px);z-index:200;
+  position:fixed;left:50%;bottom:calc(100px + env(safe-area-inset-bottom));transform:translate(-50%,14px);z-index:9999;
   background:rgba(24,30,40,.88);color:#fff;font-size:13px;padding:9px 16px;border-radius:20px;
   opacity:0;pointer-events:none;transition:opacity .22s,transform .22s;max-width:80vw;text-align:center;
 }
@@ -4585,21 +4585,41 @@ body.voice-recording *{
 .bl-add .ds{font-size:10px;font-weight:600;}
 .bl-add .cnt{font-size:8.5px;color:#A8AFBB;}
 .bl-add:active{background:rgba(18,183,245,.10);}
-/* 底部浇水栏：吸底 + 安全区内边距，z-index 抬高，避免被卡片/圆角裁掉 */
-.bl-waterbar{
-  position:sticky;bottom:0;margin-top:12px;
-  padding:10px 4px calc(16px + env(safe-area-inset-bottom)) !important;
+/* 底部浇水栏：固定在底部（自动避开底部 Tab 栏与 iPhone 安全区），绝不随列表裁切 */
+/* 注意：绝不能在这里写 display:flex。
+ * .page 默认 display:none，只有加 .active 才显示；用 #page-sub 单写 display 会因 ID 优先级
+ * 覆盖掉 .page 的隐藏规则，导致空白子页盖住首页。
+ * 这里只补 overflow，显示/隐藏完全交给 .page / .page.active。 */
+#page-sub{overflow:hidden;}
+/* 浇水栏改为 fixed 后不再占据文档流，给滚动区留出足够底部空间，防止最后一行花盆被挡 */
+#subBody.has-bl-waterdock{flex:1;min-height:0;overflow-y:auto;box-sizing:border-box;padding-bottom:calc(100px + env(safe-area-inset-bottom)) !important;}
+.bl-waterdock{
+  position:fixed !important;
+  left:50% !important;
+  transform:translateX(-50%);
+  width:100% !important;
+  max-width:480px;
+  bottom:var(--bl-bar-bottom, 0px) !important;
+  padding:12px 16px calc(16px + env(safe-area-inset-bottom)) !important;
+  box-sizing:border-box;
   display:flex;flex-direction:column;gap:6px;
-  background:linear-gradient(180deg,rgba(242,243,245,0),rgba(242,243,245,.97) 30%);
-  z-index:30;
+  height:auto;min-height:0;
+  background:#fff;
+  box-shadow:0 -4px 10px rgba(0,0,0,.05);
+  border-top:1px solid rgba(60,60,67,.06);
+  z-index:1000 !important;
+  overflow:visible;
+}
+@media (min-width:560px){
+  .bl-waterdock{border-radius:0 0 24px 24px;}
 }
 .bl-waterbtn{
-  width:100%;min-height:48px;padding:12px 10px;border-radius:14px;
-  display:flex;align-items:center;justify-content:center;line-height:1.35;
+  width:100%;min-height:48px;height:auto;padding:12px 10px;border-radius:14px;
+  display:flex;align-items:center;justify-content:center;line-height:1.4;
   background:linear-gradient(135deg,#12b7f5,#57C7F2);color:#fff;
   font-size:14px;font-weight:700;box-shadow:0 8px 20px rgba(18,183,245,.28);
   transition:background .18s ease,box-shadow .18s ease,color .18s ease;
-  touch-action:manipulation;box-sizing:border-box;
+  touch-action:manipulation;box-sizing:border-box;overflow:visible;white-space:normal;
 }
 .bl-waterbtn.watering{background:linear-gradient(135deg,#0a9bd4,#0f86b8);}
 .bl-watertip{text-align:center;font-size:10px;color:#A8AFBB;}
