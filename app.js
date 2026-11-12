@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v9.0.4';
+const APP_VERSION = 'v9.1.0';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -11870,6 +11870,7 @@ function subShell(title, bodyHTML, rightHTML = '') {
 
 function renderSub(name) {
   homeStopCookTimer();
+  homeStopBalconyTimer();   /* 离开阳台时停掉浇水冷却计时、清掉水壶跟随图标 */
   switch (name) {
     case 'cards': return renderCardsPage();
     case 'stickers': return renderStickersPage();
@@ -11907,6 +11908,7 @@ function renderSub(name) {
     case 'wardrobe': return renderWardrobePage();
     case 'homefridge': return renderHomeFridgePage();
     case 'homestove': return renderHomeStovePage();
+    case 'homebalcony': return renderBalconyPage();  /* 家园 → 阳台 */
     case 'acts': return renderActsPage();            /* 一起演绎：一起做 → 一起演绎 的二级页 */
     case 'actroom': return renderActRoomPage();      /* 演绎房间：进行中聊天 / 已完结只读回顾 */
     case 'listen': return renderListenPage();
@@ -18750,6 +18752,7 @@ const HOME_ICONS = {
   wardrobe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8.4V7.2a2 2 0 1 1 2-2"/><path d="m12 8.4-7.4 5.2A1.4 1.4 0 0 0 5.4 16h13.2a1.4 1.4 0 0 0 .8-2.4Z"/></svg>',
   fridge: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="3.4" width="12" height="17.2" rx="2.2"/><path d="M6 10.6h12"/><path d="M9.2 6.6v1.6M9.2 13.4v2.4"/></svg>',
   stove: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.4" y="4.6" width="17.2" height="14.8" rx="2.2"/><circle cx="8.4" cy="9.4" r="1.4"/><circle cx="15.6" cy="9.4" r="1.4"/><path d="M3.4 14.2h17.2M8 17.4h8"/></svg>',
+  balcony: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.4 13.6h15.2l-1.5 6.1a1.5 1.5 0 0 1-1.5 1.1H7.4a1.5 1.5 0 0 1-1.5-1.1z"/><path d="M12 13.6V8.4"/><path d="M12 9.4c0-2.3 1.7-4.2 3.9-4.5"/><path d="M12 10.8c-2.1 0-3.8-1.5-4-3.4 2.1 0 3.8 1.5 4 3.4z"/><path d="M12 9.4c2.2-.2 3.6-1.9 3.7-3.8"/></svg>',
   trace: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.6V12l3 1.8"/></svg>'
 };
 
@@ -18757,7 +18760,8 @@ const HOME_ROOMS = [
   { key: 'living', name: '客厅', desc: '游戏机 · 留声机', icon: HOME_ICONS.living },
   { key: 'bedroom', name: '卧室', desc: '双人床 · 衣柜', icon: HOME_ICONS.bedroom },
   { key: 'study', name: '书房', desc: '书架 · 小剧场 · 书桌', icon: HOME_ICONS.study },
-  { key: 'kitchen', name: '厨房', desc: '冰箱 · 灶台', icon: HOME_ICONS.kitchen }
+  { key: 'kitchen', name: '厨房', desc: '冰箱 · 灶台', icon: HOME_ICONS.kitchen },
+  { key: 'balcony', name: '阳台', desc: '种植槽 · 小花园', icon: HOME_ICONS.balcony }
 ];
 
 /* 衣柜五个部位：头饰 / 上衣 / 裤子 / 鞋子 / 小饰品。
@@ -18817,6 +18821,36 @@ const HOME_INGREDIENTS = [
   { name: '奶茶', emoji: '🧋', days: 1, ready: true, dialogue: '给你买的，少糖。' }
 ];
 
+/* ---------- 阳台：内置种子 / 生长阶段 / TA 行为间隔 ---------- */
+const HOME_SEEDS = [
+  { key: 'seed-tomato', name: '番茄', emoji: '🍅', type: 'veggie' },
+  { key: 'seed-cucumber', name: '黄瓜', emoji: '🥒', type: 'veggie' },
+  { key: 'seed-strawberry', name: '草莓', emoji: '🍓', type: 'veggie' },
+  { key: 'seed-chili', name: '小辣椒', emoji: '🌶️', type: 'veggie' },
+  { key: 'seed-sunflower', name: '向日葵', emoji: '🌻', type: 'flower' },
+  { key: 'seed-rose', name: '玫瑰', emoji: '🌹', type: 'flower' },
+  { key: 'seed-tulip', name: '郁金香', emoji: '🌷', type: 'flower' },
+  { key: 'seed-daisy', name: '小雏菊', emoji: '🌼', type: 'flower' }
+];
+const HOME_PLANT_MAX_WATER = 100;               /* 水分改为百分比：0~100 */
+const HOME_WATER_DECAY_PER_HOUR = 5;            /* 每小时自然蒸发 5% */
+const HOME_WATER_MIN_GROW = 20;                 /* 低于 20% 停止生长 */
+const HOME_WATER_COOLDOWN_MS = 10 * 60 * 1000;  /* 浇水后 10 分钟冷却 */
+const HOME_POT_MAX = 9;                         /* 花盆上限 */
+/* 每个阶段需要「水分充足」的累计生长时长：种子→发芽 1 小时，发芽→成熟 4 小时 */
+const HOME_PLANT_STAGES = [
+  { needMs: 60 * 60 * 1000, label: '种子' },
+  { needMs: 4 * 60 * 60 * 1000, label: '发芽' },
+  { needMs: 0, label: '成熟' }
+];
+const HOME_TA_WATER_GAP_MS = 3 * 3600000;      /* TA 帮忙浇水的最短间隔 */
+const HOME_TA_PICK_AWAY_MS = 8 * 3600000;      /* 离开超过 8 小时，成熟的花会被 TA 先摘走 */
+const HOME_FLOWER_LOVE_LINES = [
+  '阳台上开得最好的那朵，我摘给你。',
+  '看着它的时候想到你，就摘下来了。',
+  '花开好了，第一朵想给你。'
+];
+
 /* 内置食谱：统一结构 = 菜名 / 菜品 Emoji / 食材数组（名称 + Emoji）/ 烹饪时间（分钟） */
 const HOME_RECIPES = [
   { id: 'r1', name: '番茄炒蛋', dishEmoji: '🍳', ingredients: [{ name: '番茄', emoji: '🍅' }, { name: '鸡蛋', emoji: '🥚' }], time: 5 },
@@ -18861,7 +18895,7 @@ const HOME_TRACE_POOL = {
     'TA烧了一壶热水，给你留了半杯'
   ]
 };
-const HOME_TRACE_ROOMS = { living: '客厅', bedroom: '卧室', study: '书房', kitchen: '厨房' };
+const HOME_TRACE_ROOMS = { living: '客厅', bedroom: '卧室', study: '书房', kitchen: '厨房', balcony: '阳台' };
 
 const HOME_TRACE_GAP_MS = 3 * 60 * 60 * 1000;    /* 离开超过 3 小时，回来时随机补 1~2 条生活痕迹 */
 const HOME_TA_BUY_GAP_MS = 5 * 60 * 60 * 1000;   /* TA 至少 5 小时才会补一次冰箱 */
@@ -18893,6 +18927,11 @@ function homeDefaultState() {
     lastFridgeRestockTime: 0,
     easterEggDate: '',
     easterEggCount: 0,
+    /* 阳台：默认 3 个花盆，可扩建到 9 个；空槽为 null */
+    potCount: 3,
+    balconySlots: [null, null, null],
+    customSeeds: [],
+    lastBalconyTaWaterAt: 0,
     firstBootDone: false
   };
 }
@@ -18909,6 +18948,42 @@ function homeNormOutfit(x) {
   const src = (x && typeof x === 'object') ? x : {};
   WARDROBE_SLOTS.forEach(s => { out[s.key] = homeNormOutfitItem(src[s.key]); });
   return out;
+}
+
+/* 自定义种子清洗：名称 / Emoji / 类别三件套，缺名称直接丢弃 */
+function homeNormSeed(x) {
+  if (!x || typeof x !== 'object') return null;
+  const name = String(x.name || '').trim().slice(0, 12);
+  if (!name) return null;
+  return {
+    id: String(x.id || uid()),
+    name,
+    emoji: String(x.emoji || '🌱').slice(0, 4),
+    type: x.type === 'flower' ? 'flower' : 'veggie',
+    custom: true
+  };
+}
+
+/* 种植槽清洗：空槽保留 null；水分统一为 0~100 百分比。
+ * 旧版本水分是 0~3 的小刻度（且没有 growMs 字段），这里按比例迁移，旧存档不会突然干死。 */
+function homeNormPlant(x) {
+  if (!x || typeof x !== 'object') return null;
+  const name = String(x.name || '').trim().slice(0, 12);
+  if (!name) return null;
+  const isNewScale = typeof x.growMs === 'number';
+  let water = Number(x.water) || 0;
+  water = isNewScale ? clamp(Math.round(water), 0, 100) : clamp(Math.round(water / 3 * 100), 0, 100);
+  return {
+    id: String(x.id || uid()),
+    name,
+    emoji: String(x.emoji || '🌱').slice(0, 4),
+    type: x.type === 'flower' ? 'flower' : 'veggie',
+    stage: clamp(Math.round(Number(x.stage) || 0), 0, 2),
+    water,
+    growMs: isNewScale ? Math.max(0, Number(x.growMs) || 0) : 0,
+    lastWateredTime: Math.max(0, Number(x.lastWateredTime) || 0),
+    lastUpdate: Number(x.lastUpdate) || Date.now()
+  };
 }
 
 function normalizeHome(src) {
@@ -19000,6 +19075,18 @@ function normalizeHome(src) {
       leftAt: Number(x.leftAt) || 0
     };
   }) : [];
+  /* 阳台：花盆数量 3~9，槽位数量跟随 potCount；自定义种子允许为空数组 */
+  out.potCount = clamp(Math.round(Number(s.potCount) || 3), 3, HOME_POT_MAX);
+  out.balconySlots = (function () {
+    const srcSlots = Array.isArray(s.balconySlots) ? s.balconySlots : [];
+    const arr = [];
+    for (let i = 0; i < out.potCount; i++) arr.push(homeNormPlant(srcSlots[i]));
+    return arr;
+  })();
+  out.customSeeds = Array.isArray(s.customSeeds)
+    ? s.customSeeds.map(homeNormSeed).filter(Boolean).slice(0, 40)
+    : [];
+  out.lastBalconyTaWaterAt = Math.max(0, Number(s.lastBalconyTaWaterAt) || 0);
   return out;
 }
 
@@ -19473,6 +19560,10 @@ function homeOnBoot() {
   const now = Date.now();
   homeSession.prevMe = Number(h.lastVisitMe) || 0;
   homeEnsureOutfit();
+  /* 阳台：先按时间结算生长，再处理「离开太久 TA 先摘花」与「TA 帮忙浇水」 */
+  homeGrowPlants(now);
+  homeTaPickFlowerIfAway(homeSession.prevMe, now);
+  homeTaWaterBalconyIfDue(now);
   /* 首次进入：TA 已经先买好一批食材放进冰箱 */
   if (!h.firstBootDone) {
     h.firstBootDone = true;
@@ -19505,12 +19596,14 @@ function homeTick() {
   if (!state || !state.home) return;
   const rolled = homeEnsureOutfit();
   const traceAdded = homeEnsureTraces();
+  const grown = homeGrowPlants(Date.now());
   homeSettleCooking();
   homeTaEatLeftDishes();
   homeTaBuyIfDue(true);
   homeTaCookIfDue();
-  if (rolled || traceAdded) persist();
+  if (rolled || traceAdded || grown) persist();
   if (rolled) homeRefreshIfOpen(['readtogether', 'homebedroom', 'wardrobe']);
+  if (grown) homeRefreshIfOpen(['homebalcony']);
   /* 每轮都按同一数据源刷新「TA上次来访」，分钟数会跟着走，新痕迹也会立刻同步到头部 */
   homeRefreshVisitAgo();
 }
@@ -19647,6 +19740,448 @@ function renderHomeRoomPage(roomKey) {
       navigate({ page: 'sub', name: e.route });
     });
   });
+}
+
+/* ---------- 家园·阳台（种植 / 浇水 / 采摘 / TA 联动） ---------- */
+function homeAllSeeds() {
+  const custom = (state.home.customSeeds || []).map(s => Object.assign({}, s, { custom: true }));
+  return HOME_SEEDS.concat(custom);
+}
+function homePlantStageLabel(p) {
+  return HOME_PLANT_STAGES[clamp(Number(p.stage) || 0, 0, 2)].label;
+}
+/* 花盆显示：0 种子🌱 / 1 发芽🌿 / 2 成熟后的自定义或内置 Emoji */
+function homePlantStageEmoji(p) {
+  if ((Number(p.stage) || 0) <= 0) return '🌱';
+  if (Number(p.stage) === 1) return '🌿';
+  return p.emoji;
+}
+function homePlantLeftMs(p) {
+  if ((Number(p.stage) || 0) >= 2) return 0;
+  const need = HOME_PLANT_STAGES[clamp(Number(p.stage) || 0, 0, 2)].needMs;
+  return Math.max(0, need - Math.max(0, Number(p.growMs) || 0));
+}
+/* 按时间结算单个花盆：先蒸发水分（每小时 5%），水分 ≥20% 时累计生长进度。
+ * 一次结算最多推进两个阶段，避免长时间离线后出现跳阶段死循环。 */
+function homeSettlePlant(p, now) {
+  if (!p) return false;
+  const t = Number(now) || Date.now();
+  const last = Number(p.lastUpdate) || t;
+  const dt = Math.max(0, t - last);
+  if (!dt) return false;
+  const beforeStage = p.stage;
+  const beforeWater = p.water;
+  p.water = clamp(Math.round((Number(p.water) || 0) - (dt / 3600000) * HOME_WATER_DECAY_PER_HOUR), 0, HOME_PLANT_MAX_WATER);
+  if (p.stage < 2 && p.water >= HOME_WATER_MIN_GROW) {
+    p.growMs = Math.max(0, Number(p.growMs) || 0) + dt;
+    let guard = 0;
+    while (p.stage < 2 && guard++ < 3) {
+      const need = HOME_PLANT_STAGES[p.stage].needMs;
+      if (p.growMs < need) break;
+      p.growMs -= need;
+      p.stage += 1;
+    }
+  }
+  p.lastUpdate = t;
+  return p.stage !== beforeStage || p.water !== beforeWater;
+}
+function homeGrowPlants(now) {
+  const t = Number(now) || Date.now();
+  let changed = false;
+  (state.home.balconySlots || []).forEach(p => {
+    if (homeSettlePlant(p, t)) changed = true;
+  });
+  return changed;
+}
+/* 进入家园时，TA 有 30% 概率帮你浇水：随机 1~2 个花盆 +30% 水分（3 小时冷却） */
+function homeTaWaterBalconyIfDue(now) {
+  const h = state.home;
+  const plants = (h.balconySlots || []).filter(Boolean);
+  if (!plants.length) return false;
+  const t = Number(now) || Date.now();
+  if (t - (Number(h.lastBalconyTaWaterAt) || 0) < HOME_TA_WATER_GAP_MS) return false;
+  h.lastBalconyTaWaterAt = t;
+  if (Math.random() >= 0.3) { persist(); return false; }
+  const count = Math.min(plants.length, randInt(1, 2));
+  const pool = plants.slice();
+  const watered = [];
+  for (let i = 0; i < count && pool.length; i++) {
+    const p = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+    homeSettlePlant(p, t);
+    p.water = clamp((Number(p.water) || 0) + 30, 0, HOME_PLANT_MAX_WATER);
+    watered.push(p.name);
+  }
+  homePushTrace('balcony', `TA路过阳台，帮你给${watered.join('、')}浇了点水`, t, 'ta');
+  persist();
+  showToast(`TA路过阳台，帮你给${watered.join('、')}浇了点水`);
+  return true;
+}
+/* TA 送花的卡片：与普通礼物完全同构，复用「收下」链路与未读红点 */
+function homeTaSendFlowerGift(plant, note) {
+  const roleId = homeRoleId();
+  const role = roleById(roleId);
+  if (!role) return;
+  const now = Date.now();
+  const rec = {
+    id: uid(), roleId, roleName: role.name,
+    giftName: plant.name, emoji: plant.emoji, price: 0,
+    direction: 'in', status: 'pending', claimed: false, note: String(note || ''),
+    createTime: now, ts: now, isCustom: true
+  };
+  state.giftHistory.unshift(rec);
+  if (state.giftHistory.length > 300) state.giftHistory.length = 300;
+  pushDreamMessage(roleId, {
+    sender: 'ta', type: 'gift', giftRecordId: rec.id, giftName: plant.name,
+    emoji: plant.emoji, price: 0, note: rec.note, direction: 'in', claimed: false
+  });
+  showToast(`${taName(roleId)} 把阳台上的${plant.emoji}${plant.name}摘给了你`);
+  persist();
+  if (currentRoute.page === 'sub' && currentRoute.name === 'gifts') renderGiftPage();
+}
+/* 离开超过 8 小时再进，成熟的花会被 TA 先摘走并推送礼物卡片 */
+function homeTaPickFlowerIfAway(prevVisit, now) {
+  const t = Number(now) || Date.now();
+  const prev = Number(prevVisit) || 0;
+  if (!prev || t - prev < HOME_TA_PICK_AWAY_MS) return false;
+  const h = state.home;
+  const idx = (h.balconySlots || []).findIndex(p => p && p.type === 'flower' && p.stage >= 2);
+  if (idx < 0) return false;
+  const plant = h.balconySlots[idx];
+  h.balconySlots[idx] = null;
+  const roleId = homeRoleId();
+  let line = '';
+  try {
+    line = String(composeCardText(roleId, { key: 'home-flower:' + plant.id, mergeMin: 1, mergeMax: 1 }) || '').trim();
+  } catch (e) { line = ''; }
+  if (!line) line = homeRandPick(HOME_FLOWER_LOVE_LINES);
+  homeTaSendFlowerGift(plant, line);
+  homePushTrace('balcony', `TA把阳台上开好的${plant.emoji}${plant.name}摘走了，放在了你的桌上`, t, 'ta');
+  persist();
+  homeRefreshIfOpen(['homebalcony', 'readtogether']);
+  return true;
+}
+/* 我把花送给 TA：先生成送出卡片；TA 稍后收下并回一句 */
+function homeSendFlowerGift(plant) {
+  const roleId = homeRoleId();
+  const role = roleById(roleId);
+  if (!role) return false;
+  const now = Date.now();
+  const rec = {
+    id: uid(), roleId, roleName: role.name,
+    giftName: plant.name, emoji: plant.emoji, price: 0,
+    direction: 'out', status: 'pending', claimed: false, note: '从阳台亲手摘的',
+    createTime: now, ts: now, isCustom: true
+  };
+  state.giftHistory.unshift(rec);
+  if (state.giftHistory.length > 300) state.giftHistory.length = 300;
+  chatOf(roleId).push({
+    id: uid(), role: 'user', sender: 'user', type: 'gift', giftRecordId: rec.id,
+    giftName: plant.name, emoji: plant.emoji, price: 0, note: rec.note,
+    direction: 'out', claimed: false, ts: now, read: true
+  });
+  persist();
+  renderChatIf(roleId);
+  if (currentRoute.page === 'sub' && currentRoute.name === 'gifts') renderGiftPage();
+  setTimeout(() => {
+    if (!roleById(roleId)) return;
+    const r = state.giftHistory.find(g => g.id === rec.id);
+    if (r) { r.claimed = true; r.claimedAt = Date.now(); r.status = 'claimed'; }
+    pushReceivedCard(roleId, 'gift', rec.id, 'ta', { giftName: rec.giftName, emoji: rec.emoji, price: 0, note: rec.note });
+    persist();
+    renderChatIf(roleId);
+    sendTaBurst(roleId, {
+      makeText: prev => composeUniqueReply(roleId, prev),
+      fallback: '谢谢你，花开得真好看。'
+    });
+  }, randInt(1600, 3200));
+  return true;
+}
+function homePlantSeed(slotIdx, seed) {
+  const idx = Number(slotIdx);
+  if (!(idx >= 0 && idx < state.home.potCount) || !seed) return;
+  if (state.home.balconySlots[idx]) return;
+  state.home.balconySlots[idx] = {
+    id: uid(),
+    name: String(seed.name).slice(0, 12),
+    emoji: String(seed.emoji || '🌱').slice(0, 4),
+    type: seed.type === 'flower' ? 'flower' : 'veggie',
+    stage: 0,
+    water: 30,        /* 新种下先给 30% 水分，够撑到第一次浇水 */
+    growMs: 0,
+    lastWateredTime: 0,
+    lastUpdate: Date.now()
+  };
+  persist(true);
+  showToast(`种下了${seed.emoji}${seed.name}`);
+  homeRefreshIfOpen(['homebalcony', 'readtogether']);
+}
+/* 扩建一个花盆：上限 9 个 */
+function homeExpandPot() {
+  const h = state.home;
+  if (h.potCount >= HOME_POT_MAX) { showToast('花盆已经放满啦（最多 9 个）'); return; }
+  h.potCount += 1;
+  h.balconySlots.push(null);
+  persist(true);
+  showToast('扩建了一个花盆');
+  renderBalconyPage();
+}
+
+/* ---------- 浇水模式与 10 分钟冷却 ---------- */
+let blWatering = false;
+let blWaterTimer = 0;
+let blWaterCursorEl = null;
+function homeStopBalconyTimer() {
+  if (blWaterTimer) { clearInterval(blWaterTimer); blWaterTimer = 0; }
+  blWatering = false;
+  if (blWaterCursorEl && blWaterCursorEl.parentNode) blWaterCursorEl.parentNode.removeChild(blWaterCursorEl);
+  blWaterCursorEl = null;
+  document.body.classList.remove('bl-watering');
+}
+/* 每盆植物独立冷却：距上次浇水满 10 分钟才可再浇 */
+function homePlantCooldownLeft(p) {
+  if (!p) return 0;
+  const last = Number(p.lastWateredTime) || 0;
+  return Math.max(0, last + HOME_WATER_COOLDOWN_MS - Date.now());
+}
+/* 底部按钮只有「待机 / 浇水模式中」两态，不再有全局倒计时 */
+function homeSyncWaterButton(body) {
+  const btn = $('[data-bl-waterbtn]', body || document);
+  if (!btn) return;
+  btn.disabled = false;
+  btn.classList.toggle('watering', blWatering);
+  btn.textContent = blWatering ? '浇水模式中...（点花盆浇水）' : '💧 浇水';
+}
+/* 刷新每盆卡片里的冷却倒计时文字 */
+function homeSyncPotCooldowns(body) {
+  $$('[data-bl-cd]', body || document).forEach(el => {
+    const p = state.home.balconySlots[Number(el.dataset.blCd)];
+    if (!p) return;
+    const left = homePlantCooldownLeft(p);
+    el.textContent = left > 0 ? '水分冷却中 ' + fmtDuration(left / 1000) : '可以浇水啦';
+    el.classList.toggle('cooling', left > 0);
+  });
+}
+/* 退出浇水模式：移除水壶跟随图标与高亮 */
+function homeExitWaterMode() {
+  blWatering = false;
+  document.body.classList.remove('bl-watering');
+  if (blWaterCursorEl && blWaterCursorEl.parentNode) blWaterCursorEl.parentNode.removeChild(blWaterCursorEl);
+  blWaterCursorEl = null;
+  $$('.bl-slot.watering-target').forEach(el => el.classList.remove('watering-target'));
+  homeSyncWaterButton(document.getElementById('subBody'));
+}
+/* 在浇水模式下点中一个花盆：按「这盆」的冷却判断，满 10 分钟才加满 */
+function homeWaterPotNow(idx) {
+  const p = state.home.balconySlots[Number(idx)];
+  if (!p) { showToast('这个花盆还空着，先种点什么吧'); return; }
+  if (homePlantCooldownLeft(p) > 0) {
+    showToast('这盆植物刚喝饱水，等会儿再浇吧~');
+    homeSyncPotCooldowns(document.getElementById('subBody'));
+    return;                    /* 本次操作无效，保持浇水模式，可换一盆继续 */
+  }
+  homeSettlePlant(p, Date.now());
+  p.water = HOME_PLANT_MAX_WATER;
+  p.lastWateredTime = Date.now();   /* 只记录这一盆的冷却 */
+  p.lastUpdate = Date.now();
+  persist(true);
+  homeExitWaterMode();
+  showToast(`你给${p.name}浇了水，水分已加满`);
+  renderBalconyPage();
+}
+function homeStartWaterMode(body) {
+  blWatering = true;
+  document.body.classList.add('bl-watering');
+  $$('.bl-slot.has-plant', body).forEach(el => el.classList.add('watering-target'));
+  homeSyncWaterButton(body);
+  /* 水壶跟随：鼠标 / 手指移动时更新位置 */
+  if (!blWaterCursorEl) {
+    blWaterCursorEl = document.createElement('div');
+    blWaterCursorEl.className = 'bl-water-cursor';
+    blWaterCursorEl.textContent = '🫗';
+    document.body.appendChild(blWaterCursorEl);
+  }
+  const follow = e => {
+    if (!blWatering || !blWaterCursorEl) return;
+    const t = e.touches && e.touches[0] ? e.touches[0] : e;
+    blWaterCursorEl.style.left = (t.clientX || 0) + 'px';
+    blWaterCursorEl.style.top = (t.clientY || 0) + 'px';
+  };
+  body.addEventListener('mousemove', follow);
+  body.addEventListener('touchmove', follow, { passive: true });
+}
+async function homeHarvestPlant(idx) {
+  const h = state.home;
+  const i = Number(idx);
+  const p = h.balconySlots[i];
+  if (!p || p.stage < 2) return;
+  const roleName = taName(homeRoleId());
+  if (p.type === 'flower') {
+    const yes = await confirmDialog('要送给TA吗？', `要把这朵【${p.name}】送给 ${roleName} 吗？`, '送给TA');
+    if (!yes) return;
+    h.balconySlots[i] = null;
+    homeSendFlowerGift(p);
+    homePushTrace('balcony', `你从阳台摘下${p.emoji}${p.name}，送给了TA`, Date.now(), 'user');
+    persist(true);
+    showToast(`你把${p.emoji}${p.name}送给了TA`);
+    homeRefreshIfOpen(['homebalcony', 'readtogether']);
+    return;
+  }
+  h.balconySlots[i] = null;
+  homeAddFridgeItem(p.name, p.emoji, 7, 'user');
+  homePushTrace('balcony', `你从阳台摘下了${p.emoji}${p.name}，放进了冰箱`, Date.now(), 'user');
+  persist(true);
+  showToast(`收获了【${p.emoji}${p.name}】，已自动放进冰箱！`);
+  homeRefreshIfOpen(['homebalcony', 'readtogether', 'homefridge']);
+}
+/* 种子选择面板：内置 + 自定义合并展示，自定义可删 */
+function homeOpenSeedPicker(slotIdx) {
+  const seeds = homeAllSeeds();
+  const row = s => `
+    <div class="bl-seed" data-bl-seed="${esc(s.id || s.key)}">
+      <span class="e">${esc(s.emoji)}</span>
+      <span class="n">${esc(s.name)}</span>
+      ${s.custom ? `<button class="bl-seed-del" data-bl-seed-del="${esc(s.id)}" aria-label="删除">✕</button>` : ''}
+    </div>`;
+  const veg = seeds.filter(s => s.type !== 'flower');
+  const flw = seeds.filter(s => s.type === 'flower');
+  const modal = showModal({
+    title: '选择种子',
+    wide: true,
+    body: `
+      <div class="bl-seed-hd">蔬菜 / 水果</div>
+      <div class="bl-seed-grid">${veg.map(row).join('')}</div>
+      <div class="bl-seed-hd">花朵</div>
+      <div class="bl-seed-grid">${flw.length ? flw.map(row).join('') : '<div class="bl-empty">还没有花朵种子</div>'}</div>
+      <button class="bl-add-seed" id="blAddSeed">+ 自定义种子</button>`,
+    actions: [{ label: '取消' }]
+  });
+  $$('[data-bl-seed]', modal.el).forEach(el => el.addEventListener('click', () => {
+    const key = el.dataset.blSeed;
+    const seed = homeAllSeeds().find(s => String(s.id || s.key) === key);
+    if (!seed) return;
+    modal.close();
+    homePlantSeed(slotIdx, seed);
+  }));
+  $$('[data-bl-seed-del]', modal.el).forEach(btn => btn.addEventListener('click', async e => {
+    e.stopPropagation();
+    const yes = await confirmDialog('删除种子', '确定从自定义种子库里删掉这个种子吗？', '删除', true);
+    if (!yes) return;
+    state.home.customSeeds = state.home.customSeeds.filter(s => s.id !== btn.dataset.blSeedDel);
+    persist(true);
+    modal.close();
+    homeOpenSeedPicker(slotIdx);
+  }));
+  const add = $('#blAddSeed', modal.el);
+  if (add) add.addEventListener('click', () => {
+    modal.close();
+    homeOpenCustomSeedForm(slotIdx);
+  });
+}
+function homeOpenCustomSeedForm(slotIdx) {
+  const modal = showModal({
+    title: '自定义种子',
+    body: `
+      <div class="field"><label>种子 / 植物名称</label><input class="input" id="blSeedName" maxlength="12" placeholder="例如：魔法蘑菇"></div>
+      <div class="field"><label>成熟后的 Emoji</label><input class="input" id="blSeedEmoji" maxlength="4" placeholder="例如：🍄"></div>
+      <div class="field"><label>类别</label>
+        <select class="input" id="blSeedType">
+          <option value="veggie">蔬菜 / 水果类</option>
+          <option value="flower">花朵类</option>
+        </select>
+      </div>`,
+    actions: [
+      { label: '取消' },
+      { label: '保存', kind: 'primary', onClick: () => {
+        const name = $('#blSeedName', modal.el).value.trim();
+        const emoji = $('#blSeedEmoji', modal.el).value.trim() || '🌱';
+        const type = $('#blSeedType', modal.el).value === 'flower' ? 'flower' : 'veggie';
+        if (!name) { showToast('请填写种子名称'); return false; }
+        state.home.customSeeds.push({
+          id: 'cs-' + uid(), name: name.slice(0, 12), emoji: emoji.slice(0, 4), type, custom: true
+        });
+        persist(true);
+        showToast('已加入自定义种子库');
+        setTimeout(() => homeOpenSeedPicker(slotIdx), 120);
+      } }
+    ]
+  });
+}
+function renderBalconyPage() {
+  const h = state.home;
+  homeGrowPlants(Date.now());
+  const roleName = esc(taName(homeRoleId()));
+  const slots = h.balconySlots || [];
+  const cards = slots.map((p, i) => {
+    if (!p) {
+      return `<div class="bl-slot empty">
+        <div class="bl-emoji pot">🪴</div>
+        <div class="bl-nm">空花盆</div>
+        <div class="bl-stage">种点什么吧</div>
+        <div class="bl-actions"><button class="bl-btn primary" data-bl-plant="${i}">+ 种植</button></div>
+      </div>`;
+    }
+    const mature = p.stage >= 2;
+    const dry = p.water < HOME_WATER_MIN_GROW;
+    const hint = mature
+      ? '成熟了，可以采摘'
+      : (dry ? '水分不足，浇点水才会长' : `还需约 ${Math.max(1, Math.ceil(homePlantLeftMs(p) / 3600000))} 小时`);
+    const cdLeft = homePlantCooldownLeft(p);
+    return `<div class="bl-slot has-plant${mature ? ' ready' : ''}" data-bl-pot="${i}">
+      <div class="bl-emoji">${esc(homePlantStageEmoji(p))}</div>
+      <div class="bl-nm">${esc(p.name)}<span class="bl-tag ${p.type}">${p.type === 'flower' ? '花卉' : '果蔬'}</span></div>
+      <div class="bl-stage">${homePlantStageLabel(p)} · ${esc(hint)}</div>
+      <div class="bl-waterline">
+        <div class="bl-waterbar"><i style="width:${p.water}%"></i></div>
+        <span class="bl-watertxt${dry ? ' dry' : ''}">水分：${p.water}%</span>
+      </div>
+      <div class="bl-cd${cdLeft > 0 ? ' cooling' : ''}" data-bl-cd="${i}">${cdLeft > 0 ? '水分冷却中 ' + fmtDuration(cdLeft / 1000) : '可以浇水啦'}</div>
+      ${mature ? `<div class="bl-actions"><button class="bl-btn primary" data-bl-pick="${i}" data-stop>采摘</button></div>` : ''}
+    </div>`;
+  }).join('');
+  const expand = h.potCount < HOME_POT_MAX
+    ? `<button class="bl-slot bl-add" data-bl-expand aria-label="扩建花盆">
+        <span class="plus">+</span><span class="ds">扩建花盆</span>
+        <span class="cnt">${h.potCount}/${HOME_POT_MAX}</span>
+      </button>`
+    : '';
+  const body = subShell('阳台', `
+    <div class="hm-card bl-card">
+      <div class="hm-card-hd">
+        <div class="t">阳台小花园</div>
+        <div class="s">${esc(roleName)} 的 ${h.potCount} 个花盆</div>
+      </div>
+      <div class="bl-grid">${cards}${expand}</div>
+      <div class="bl-hint">水分每小时蒸发 5%，低于 20% 会停止生长。花盆最多扩建到 ${HOME_POT_MAX} 个。</div>
+    </div>
+    <div class="bl-waterbar">
+      <button class="bl-waterbtn" data-bl-waterbtn>💧 浇水</button>
+      <div class="bl-watertip">点「浇水」后选择花盆 · 每盆独立冷却 10 分钟</div>
+    </div>`);
+  homeExitWaterMode();
+  homeSyncWaterButton(body);
+
+  $$('[data-bl-plant]', body).forEach(btn => btn.addEventListener('click', () => homeOpenSeedPicker(btn.dataset.blPlant)));
+  $$('[data-bl-pick]', body).forEach(btn => btn.addEventListener('click', e => {
+    e.stopPropagation();
+    homeHarvestPlant(btn.dataset.blPick);
+  }));
+  $$('[data-bl-pot]', body).forEach(card => card.addEventListener('click', () => {
+    if (blWatering) homeWaterPotNow(card.dataset.blPot);
+  }));
+  const expandBtn = $('[data-bl-expand]', body);
+  if (expandBtn) expandBtn.addEventListener('click', homeExpandPot);
+  const waterBtn = $('[data-bl-waterbtn]', body);
+  if (waterBtn) waterBtn.addEventListener('click', () => {
+    if (blWatering) { homeExitWaterMode(); return; }
+    homeStartWaterMode(body);
+  });
+  /* 每秒刷新各花盆的独立冷却倒计时，归零后自动显示「可以浇水啦」 */
+  if (blWaterTimer) { clearInterval(blWaterTimer); blWaterTimer = 0; }
+  blWaterTimer = setInterval(() => {
+    const el = document.getElementById('subBody');
+    if (!el || currentRoute.name !== 'homebalcony') { homeStopBalconyTimer(); return; }
+    homeSyncPotCooldowns(el);
+  }, 1000);
 }
 
 /* ---------- 卧室·衣柜 ---------- */

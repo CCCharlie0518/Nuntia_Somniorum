@@ -4545,6 +4545,103 @@ body.voice-recording *{
 .hm-room-nm{font-size:15px;font-weight:700;color:#1C1C1E;}
 .hm-room-ds{font-size:10.5px;color:#98A1B0;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;}
 .hm-foot{text-align:center;font-size:10.5px;color:#B4BAC5;letter-spacing:.4px;padding:20px 0 6px;}
+/* ---------- 阳台小花园 ---------- */
+.bl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+.bl-slot{
+  position:relative;display:flex;flex-direction:column;align-items:center;gap:4px;
+  padding:12px 6px 10px;border-radius:14px;background:#F7F9FC;
+  border:.5px solid rgba(60,60,67,.06);text-align:center;
+}
+.bl-slot.ready{background:linear-gradient(180deg,#FFFBF2,#FDF6E9);border-color:rgba(240,170,90,.32);}
+.bl-emoji{font-size:30px;line-height:1.1;}
+.bl-emoji.pot{opacity:.55;}
+.bl-nm{display:flex;align-items:center;gap:3px;font-size:12px;font-weight:600;color:#3B4658;max-width:100%;}
+.bl-nm .bl-tag{font-size:8px;line-height:1;padding:1px 3px;border-radius:4px;font-weight:600;}
+.bl-nm .bl-tag.flower{color:#C2410C;background:rgba(249,115,22,.13);}
+.bl-nm .bl-tag.veggie{color:#15803D;background:rgba(34,197,94,.13);}
+.bl-stage{font-size:9.5px;line-height:1.45;color:#9AA3B2;min-height:26px;}
+.bl-slot.ready .bl-stage{color:#B4783A;}
+/* 水分百分比 + 进度条 */
+.bl-waterline{width:100%;display:flex;flex-direction:column;gap:3px;margin-top:2px;}
+.bl-waterbar{height:4px;border-radius:2px;background:#E6EBF2;overflow:hidden;}
+.bl-waterbar i{display:block;height:100%;border-radius:2px;background:linear-gradient(90deg,#57C7F2,#12b7f5);transition:width .3s ease;}
+.bl-watertxt{font-size:9px;color:#8E96A5;}
+.bl-watertxt.dry{color:#D97706;font-weight:600;}
+.bl-actions{display:flex;gap:4px;width:100%;margin-top:2px;}
+.bl-btn{
+  flex:1;padding:5px 0;border-radius:9px;font-size:10.5px;font-weight:600;
+  background:#fff;color:#0a9bd4;border:.5px solid rgba(18,183,245,.28);
+}
+.bl-btn.primary{background:var(--primary);color:#fff;border-color:transparent;}
+.bl-btn:disabled{color:#C2C7D0;border-color:#EDEFF3;background:#F7F8FA;}
+.bl-hint{font-size:10px;line-height:1.7;color:#A8AFBB;margin-top:10px;}
+/* 虚线扩建花盆 */
+.bl-add{
+  justify-content:center;gap:3px;min-height:148px;
+  border:1.5px dashed rgba(18,183,245,.35);background:rgba(18,183,245,.04);
+  color:#6FAFC8;cursor:pointer;
+}
+.bl-add .plus{font-size:26px;line-height:1;font-weight:300;color:#12b7f5;}
+.bl-add .ds{font-size:10px;font-weight:600;}
+.bl-add .cnt{font-size:8.5px;color:#A8AFBB;}
+.bl-add:active{background:rgba(18,183,245,.10);}
+/* 底部浇水栏：吸底 + 安全区内边距，z-index 抬高，避免被卡片/圆角裁掉 */
+.bl-waterbar{
+  position:sticky;bottom:0;margin-top:12px;
+  padding:10px 4px calc(16px + env(safe-area-inset-bottom)) !important;
+  display:flex;flex-direction:column;gap:6px;
+  background:linear-gradient(180deg,rgba(242,243,245,0),rgba(242,243,245,.97) 30%);
+  z-index:30;
+}
+.bl-waterbtn{
+  width:100%;min-height:48px;padding:12px 10px;border-radius:14px;
+  display:flex;align-items:center;justify-content:center;line-height:1.35;
+  background:linear-gradient(135deg,#12b7f5,#57C7F2);color:#fff;
+  font-size:14px;font-weight:700;box-shadow:0 8px 20px rgba(18,183,245,.28);
+  transition:background .18s ease,box-shadow .18s ease,color .18s ease;
+  touch-action:manipulation;box-sizing:border-box;
+}
+.bl-waterbtn.watering{background:linear-gradient(135deg,#0a9bd4,#0f86b8);}
+.bl-watertip{text-align:center;font-size:10px;color:#A8AFBB;}
+/* 每盆独立的浇水冷却倒计时 */
+.bl-cd{font-size:9px;line-height:1.3;color:#15803D;font-weight:600;margin-top:1px;}
+.bl-cd.cooling{color:#B4BAC5;font-weight:400;}
+/* 浇水模式：花盆高亮 + 水壶跟随 + 隐藏系统指针 */
+body.bl-watering .bl-slot.has-plant{cursor:pointer;box-shadow:0 0 0 2px rgba(18,183,245,.3);}
+body.bl-watering .bl-slot.has-plant.watering-target{animation:blPulse 1.4s ease-in-out infinite;}
+body.bl-watering .bl-water-cursor{display:block;}
+body.bl-watering,body.bl-watering *{cursor:none !important;}
+.bl-water-cursor{
+  position:fixed;z-index:99999;font-size:32px;line-height:1;
+  pointer-events:none;transform:translate(-50%,-72%) rotate(-12deg);
+  filter:drop-shadow(0 4px 6px rgba(0,0,0,.22));display:none;
+}
+@keyframes blPulse{
+  0%,100%{box-shadow:0 0 0 2px rgba(18,183,245,.22);}
+  50%{box-shadow:0 0 0 4px rgba(18,183,245,.48);}
+}
+/* 种子选择面板 */
+.bl-seed-hd{font-size:11px;font-weight:600;color:#8E96A5;margin:10px 0 6px;}
+.bl-seed-hd:first-child{margin-top:0;}
+.bl-seed-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;}
+.bl-seed{
+  position:relative;display:flex;flex-direction:column;align-items:center;gap:2px;
+  padding:9px 3px 7px;border-radius:11px;background:#F7F9FC;cursor:pointer;
+  border:.5px solid rgba(60,60,67,.06);
+}
+.bl-seed:active{background:#EEF2F8;}
+.bl-seed .e{font-size:20px;line-height:1.1;}
+.bl-seed .n{font-size:10px;color:#5C6575;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.bl-seed-del{
+  position:absolute;top:-4px;right:-4px;width:17px;height:17px;border-radius:50%;
+  background:#E9ECF2;color:#8E96A5;font-size:10px;line-height:17px;text-align:center;
+}
+.bl-empty{grid-column:1/-1;text-align:center;font-size:10.5px;color:#B4BAC5;padding:8px 0;}
+.bl-add-seed{
+  width:100%;margin-top:12px;padding:9px 0;border-radius:11px;
+  border:1px dashed rgba(18,183,245,.4);color:#0a9bd4;font-size:12px;font-weight:600;
+  background:rgba(18,183,245,.05);
+}
 
 .hm-room-hero{
   display:flex;align-items:center;gap:12px;border-radius:18px;padding:14px;
