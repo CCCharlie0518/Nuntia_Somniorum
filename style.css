@@ -4634,7 +4634,9 @@ body.bl-watering,body.bl-watering *{cursor:none !important;}
 .bl-water-cursor{
   position:fixed;z-index:99999;font-size:32px;line-height:1;
   pointer-events:none;transform:translate(-50%,-72%) rotate(-12deg);
-  filter:drop-shadow(0 4px 6px rgba(0,0,0,.22));display:none;
+  /* 中性灰 + 半透明，避免红色图标遮挡视线 */
+  filter:drop-shadow(0 4px 6px rgba(0,0,0,.18)) grayscale(.25);
+  opacity:.8;display:none;
 }
 @keyframes blPulse{
   0%,100%{box-shadow:0 0 0 2px rgba(18,183,245,.22);}

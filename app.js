@@ -2196,6 +2196,10 @@ let currentTab = 'home';
 let convSearch = '';
 
 function navigate(route, replace = false) {
+  /* 离开阳台（含返回首页）：强制退出浇水模式，防止水壶图标飘到别的页面 */
+  const leavingBalcony = currentRoute && currentRoute.page === 'sub' && currentRoute.name === 'homebalcony' &&
+    !(route && route.page === 'sub' && route.name === 'homebalcony');
+  if (leavingBalcony && typeof homeStopBalconyTimer === 'function') homeStopBalconyTimer();
   if (!replace && currentRoute) routeStack.push(currentRoute);
   currentRoute = route;
   applyRoute();
@@ -19985,11 +19989,21 @@ function homeSyncPotCooldowns(body) {
 function homeExitWaterMode() {
   isWatering = false;
   document.body.classList.remove('bl-watering');
-  if (blWaterCursorEl && blWaterCursorEl.parentNode) blWaterCursorEl.parentNode.removeChild(blWaterCursorEl);
+  /* 彻底清理：不只删引用，把 DOM 里所有残留水壶一起移除 */
+  $$('.bl-water-cursor').forEach(el => { if (el.parentNode) el.parentNode.removeChild(el); });
   blWaterCursorEl = null;
   $$('.bl-slot.watering-target').forEach(el => el.classList.remove('watering-target'));
   homeSyncWaterButton(document.getElementById('subBody'));
 }
+/* 空白处点击取消浇水：绑在 document 上（冒泡阶段），
+ * 花盆 / 浇水按钮都做了 stopPropagation，因此不会误取消；
+ * 即使点在 #subBody 之外的页面背景、顶栏空白处，也能正常退出。 */
+document.addEventListener('click', e => {
+  if (!isWatering) return;
+  const t = e.target;
+  if (t && t.closest && t.closest('[data-bl-pot],[data-bl-waterbtn],[data-bl-plant],[data-bl-pick],[data-bl-expand],.bl-waterdock,.modal-overlay,.modal,.toast')) return;
+  homeExitWaterMode();
+}, false);
 /* 在浇水模式下点中一个花盆：按「这盆」的冷却判断，满 10 分钟才加满 */
 function homeWaterPotNow(idx) {
   const p = state.home.balconySlots[Number(idx)];
@@ -20017,7 +20031,7 @@ function homeStartWaterMode(body) {
   if (!blWaterCursorEl) {
     blWaterCursorEl = document.createElement('div');
     blWaterCursorEl.className = 'bl-water-cursor';
-    blWaterCursorEl.textContent = '🫗';
+    blWaterCursorEl.textContent = '🚿';   /* 中性灰的水壶，避免红色图标 */
     document.body.appendChild(blWaterCursorEl);
   }
   const follow = e => {
@@ -20199,15 +20213,7 @@ function renderBalconyPage() {
     if (isWatering) { homeExitWaterMode(); return; }
     homeStartWaterMode(body);
   });
-  /* 点击空白处（非花盆 / 非浇水按钮 / 非底部栏）取消浇水模式 */
-  if (!body.dataset.blBlankBound) {
-    body.dataset.blBlankBound = '1';
-    body.addEventListener('click', e => {
-      if (!isWatering) return;
-      if (e.target.closest('[data-bl-pot],[data-bl-waterbtn],[data-bl-plant],[data-bl-pick],[data-bl-expand],.bl-waterdock,.modal-overlay')) return;
-      homeExitWaterMode();
-    });
-  }
+  /* 点击空白取消已统一交给 document 级监听（见 homeExitWaterMode 之后），此处不再重复绑定 */
   /* 每秒刷新各花盆的独立冷却倒计时，归零后自动显示「可以浇水啦」 */
   if (blWaterTimer) { clearInterval(blWaterTimer); blWaterTimer = 0; }
   blWaterTimer = setInterval(() => {
