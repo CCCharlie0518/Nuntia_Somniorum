@@ -19003,13 +19003,17 @@ function normalizeHome(src) {
   out.easterEggDate = typeof s.easterEggDate === 'string' ? s.easterEggDate : '';
   out.easterEggCount = Math.max(0, Math.round(Number(s.easterEggCount) || 0));
   out.firstBootDone = s.firstBootDone === true;
-  out.traces = Array.isArray(s.traces) ? s.traces.filter(t => t && typeof t === 'object' && t.text).map(t => ({
-    id: String(t.id || uid()),
-    ts: Number(t.ts) || Date.now(),
-    room: HOME_TRACE_ROOMS[t.room] ? t.room : 'living',
-    actor: homeTraceActorOf(t),
-    text: String(t.text).slice(0, 80)
-  })).sort((a, b) => b.ts - a.ts).slice(0, HOME_TRACE_MAX) : [];
+  out.traces = Array.isArray(s.traces) ? s.traces.filter(t => t && typeof t === 'object' && t.text).map(t => {
+    const room = HOME_TRACE_ROOMS[t.room] ? t.room : 'living';
+    return {
+      id: String(t.id || uid()),
+      ts: Number(t.ts) || Date.now(),
+      room,
+      area: HOME_TRACE_ROOMS[room],           /* 区域中文名，便于按「阳台」等名称筛选 */
+      actor: homeTraceActorOf(t),
+      text: String(t.text).slice(0, 80)
+    };
+  }).sort((a, b) => b.ts - a.ts).slice(0, HOME_TRACE_MAX) : [];
   /* 衣服：数组存在就逐条清洗（允许用户删空）；不存在才补默认衣柜 */
   out.clothes = Array.isArray(s.clothes)
     ? s.clothes.filter(c => c && typeof c === 'object').map(c => {
@@ -19164,6 +19168,7 @@ function homePushTrace(room, text, ts, actor) {
     id: uid(),
     ts: Number(ts) || Date.now(),
     room: key,
+    area: HOME_TRACE_ROOMS[key] || '客厅',   /* 区域中文名：阳台动态在这里打标 */
     actor: who,
     text: String(text || '').slice(0, 80)
   });
@@ -20178,7 +20183,17 @@ function renderBalconyPage() {
         <span class="cnt">${h.potCount}/${HOME_POT_MAX}</span>
       </button>`
     : '';
+  /* 最近一条「阳台 · TA」动态：生活痕迹按时间倒序，取第一条即可 */
+  const latestTa = (h.traces || []).find(t => t.actor === 'ta' && (t.area === '阳台' || t.room === 'balcony'));
+  const latestText = latestTa ? latestTa.text : '花盆里的植物长势很好，TA也很喜欢这里。';
   const body = subShell('阳台', `
+    <div class="hm-room-hero">
+      <div class="ic">${HOME_ICONS.balcony}</div>
+      <div class="txt">
+        <div class="t">阳台</div>
+        <div class="d">最近：${esc(latestText)}</div>
+      </div>
+    </div>
     <div class="hm-card bl-card">
       <div class="hm-card-hd">
         <div class="t">阳台小花园</div>
