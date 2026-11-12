@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v9.0.3';
+const APP_VERSION = 'v9.0.4';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -6202,6 +6202,7 @@ const APP_ICONS = {
   games: '<svg viewBox="0 0 24 24"><path d="M7.2 8.4h9.6a4.6 4.6 0 0 1 4.5 5.5l-.6 2.9a2.7 2.7 0 0 1-4.6 1.3l-1.3-1.5a1.7 1.7 0 0 0-1.3-.6h-3a1.7 1.7 0 0 0-1.3.6l-1.3 1.5a2.7 2.7 0 0 1-4.6-1.3l-.6-2.9A4.6 4.6 0 0 1 7.2 8.4Z"/><path d="M8.7 11v3.2M7.1 12.6h3.2"/><circle cx="15.6" cy="11.5" r=".9"/><circle cx="17.5" cy="13.5" r=".9"/></svg>',
   /* 五子棋：线条风棋盘（一角黑子一角白子） */
   gomoku: '<svg viewBox="0 0 24 24"><rect x="3.4" y="3.4" width="17.2" height="17.2" rx="2.4"/><path d="M3.4 9.1h17.2M3.4 14.9h17.2M9.1 3.4v17.2M14.9 3.4v17.2"/><circle cx="9.1" cy="9.1" r="1.4" fill="currentColor" stroke="none"/><circle cx="14.9" cy="14.9" r="1.4"/></svg>',
+  badminton: '<svg viewBox="0 0 24 24"><ellipse cx="9.3" cy="8.7" rx="5" ry="6.1" transform="rotate(-34 9.3 8.7)"/><path d="M12.9 13.1 19 19.2M5.9 4.6 12 11.6M11.6 3 15.4 7.6M6.6 9.6l4.6 3.8"/><circle cx="16.4" cy="16.6" r="1.1" fill="currentColor" stroke="none"/></svg>',
   /* 桌面宠物：线条风小猫脸（双耳 + 眼睛 + 嘴 + 胡须） */
   pet: '<svg viewBox="0 0 24 24"><path d="M6.4 10.2 5 4.9a.7.7 0 0 1 1-.8l3.2 2.3M17.6 10.2 19 4.9a.7.7 0 0 0-1-.8l-3.2 2.3"/><path d="M12 6.1c-3.5 0-6.3 2.5-6.3 5.8 0 3.3 2.8 5.6 6.3 5.6s6.3-2.3 6.3-5.6c0-3.3-2.8-5.8-6.3-5.8Z"/><path d="M9.7 11.1v1M14.3 11.1v1M12 13.3v.9"/><path d="M10.7 15.3c.8.6 1.8.6 2.6 0M3.4 12.2l2.3.6M3.6 15l2.2-.4M20.6 12.2l-2.3.6M20.4 15l-2.2-.4"/></svg>',
   settings: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
@@ -11897,6 +11898,7 @@ function renderSub(name) {
     case 'mood-history': return renderMoodHistoryPage();  /* 心情历史：从「记录心情」弹窗标题右侧进入 */
     case 'play': return renderPlayPage();            /* 一起玩：一起做 → 一起玩 → 五子棋 的二级页 */
     case 'games': return renderPlayPage();           /* 旧路由兜底：桌面小游戏已并入【一起玩】 */
+    case 'badminton': return renderBadmintonPage();  /* 一起玩 → 赛博羽毛球 */
     case 'readtogether': return renderReadTogetherPage();
     case 'homeliving': return renderHomeRoomPage('living');
     case 'homebedroom': return renderHomeRoomPage('bedroom');
@@ -15120,9 +15122,15 @@ function renderPlayPage() {
         <span class="ge-info"><b>五子棋</b><span class="muted">黑白对弈 · 和 ${esc(taName())} 下一局</span></span>
         <span class="ge-go">›</span>
       </button>
+      <button class="game-entry" id="playBadminton">
+        <span class="ge-ic">${APP_ICONS.badminton}</span>
+        <span class="ge-info"><b>赛博羽毛球</b><span class="muted">霓虹球场 · 三种陪玩模式随你挑</span></span>
+        <span class="ge-go">›</span>
+      </button>
     </div>
     <div class="muted" style="text-align:center;margin-top:10px">更多小游戏筹备中…</div>`);
   $('#playGomoku', body).addEventListener('click', () => navigate({ page: 'sub', name: 'gomoku' }));
+  $('#playBadminton', body).addEventListener('click', () => navigate({ page: 'sub', name: 'badminton' }));
 }
 
 /* =========================================================
@@ -15139,7 +15147,7 @@ const GMK_ATTITUDES = {
 const GMK_LINES = {
   good: ['这步下得不错嘛！', '居然被你发现了！', '好险好险，差点就输了'],
   bad: ['哎呀，你怎么下那里呀？', '这步棋，我可不客气了哦'],
-  water: ['咳，刚才走神了', '哎呀，我没看清那里', '刚才手滑了'],
+  water: ['咳，刚才走神了', '哎呀，我没看清那里', '刚才手滑了', '被你发现破绽了', '这步不算，我重下…算了'],
   aboutWin: ['可恶，要输了吗？', '让让你好啦'],
   undo: ['怎么，想反悔呀？', '不许耍赖哦~', '拿你没办法，悔吧悔吧'],
   winMe: ['还是你厉害，我认输啦。', '恭喜你赢啦，想要什么奖励？'],
@@ -15514,10 +15522,87 @@ function gmkPick(cands, ta, me, defWeight, noise) {
   return best || [7, 7];
 }
 
+/* 某颜色「落子后能造出活四」的点：用来识别活三（同一组活三的两个端点会各算一次） */
+function gmkLiveThreePoints(color) {
+  const cands = gmkCandidates();
+  const out = [];
+  for (const [x, y] of cands) {
+    if (gmkWinAt(x, y, color)) continue;
+    gmk.board[y][x] = color;
+    let wins = 0;
+    for (const [a, b] of cands) {
+      if ((a === x && b === y) || gmk.board[b][a] !== 0) continue;
+      if (gmkWinAt(a, b, color)) wins++;
+      if (wins >= 2) break;
+    }
+    gmk.board[y][x] = 0;
+    if (wins >= 2) out.push([x, y]);
+  }
+  return out;
+}
+
+/* 统计「活三组数」：同一组三子从两端补棋会得到同一个四子组合，按方向 + 三子坐标去重 */
+function gmkOpenThreeGroups(color) {
+  const cands = gmkCandidates();
+  const dirs = [[1, 0], [0, 1], [1, 1], [1, -1]];
+  const groups = new Set();
+  for (const [x, y] of cands) {
+    if (gmkWinAt(x, y, color)) continue;
+    gmk.board[y][x] = color;
+    for (const [dx, dy] of dirs) {
+      const stones = [[x, y]];
+      let negOpen = false, posOpen = false;
+      for (let s = 1; s < 5; s++) {
+        const nx = x - dx * s, ny = y - dy * s;
+        if (nx < 0 || ny < 0 || nx >= GMK_N || ny >= GMK_N) break;
+        if (gmk.board[ny][nx] === color) { stones.push([nx, ny]); continue; }
+        negOpen = gmk.board[ny][nx] === 0;
+        break;
+      }
+      for (let s = 1; s < 5; s++) {
+        const nx = x + dx * s, ny = y + dy * s;
+        if (nx < 0 || ny < 0 || nx >= GMK_N || ny >= GMK_N) break;
+        if (gmk.board[ny][nx] === color) { stones.push([nx, ny]); continue; }
+        posOpen = gmk.board[ny][nx] === 0;
+        break;
+      }
+      /* 落子后恰好四子连成一线且两端皆空 = 活四，说明补的是一组活三 */
+      if (stones.length === 4 && negOpen && posOpen) {
+        const key = stones.filter(p => p[0] !== x || p[1] !== y)
+          .map(p => p[0] + ',' + p[1]).sort().join('|') + ':' + dx + ',' + dy;
+        groups.add(key);
+      }
+    }
+    gmk.board[y][x] = 0;
+  }
+  return groups.size;
+}
+
+/* 废棋：远离棋群密集区的空点，越远越像“走神”，用来给玩家放水 */
+function gmkWasteMove() {
+  const empties = [];
+  for (let y = 0; y < GMK_N; y++) for (let x = 0; x < GMK_N; x++) {
+    if (gmk.board[y][x]) continue;
+    let near = 99;
+    for (let yy = 0; yy < GMK_N; yy++) for (let xx = 0; xx < GMK_N; xx++) {
+      if (!gmk.board[yy][xx]) continue;
+      const d = Math.max(Math.abs(x - xx), Math.abs(y - yy));
+      if (d < near) near = d;
+    }
+    empties.push({ x, y, near });
+  }
+  if (!empties.length) return [7, 7];
+  const far = empties.filter(p => p.near >= 4);
+  const pool = far.length ? far : empties.sort((a, b) => b.near - a.near).slice(0, 10);
+  const p = pool[Math.floor(Math.random() * pool.length)];
+  return [p.x, p.y];
+}
+
 /* AI 选点：三档对局态度
- * 认真：能赢就赢、必堵五连，攻防权重最高；
- * 宠溺（默认）：能让就让，能赢也不急着赢，防守看心情，经常“放水”；
- * 随性：多半靠直觉，也会偶尔漏防。 */
+ * 认真：能赢就赢、必堵五连，攻防权重最高（保持原算法）。
+ * 宠溺（默认）：进攻/防守都大幅放水——能赢有 80% 故意走废棋，玩家冲四或双活三有 80% 假装没看见，
+ *              平时还有 30% 直接走废棋，只在玩家出现明牌三连时勉强堵一下。
+ * 随性：六成以上概率随机乱下，几乎不防守。 */
 function gmkBestMove() {
   const ta = gmkTaColor(), me = gmk.myColor, mode = gmk.attitude;
   const cands = gmkCandidates();
@@ -15529,27 +15614,56 @@ function gmkBestMove() {
     if (blockNow) return blockNow;
     return gmkPick(cands, ta, me, 1.05, 5);
   }
+
   if (mode === 'casual') {
     if (winNow && Math.random() < 0.9) return winNow;
-    if (blockNow && Math.random() < 0.55) return blockNow;
-    return gmkPick(cands, ta, me, 0.6, 26);
-  }
-  /* 宠溺模式 */
-  if (winNow && Math.random() < 0.85) {
-    gmk.watered = true;
-    const soft = cands.filter(p => p[0] !== winNow[0] || p[1] !== winNow[1]);
-    if (soft.length) return gmkPick(soft, ta, me, 0.45, 34);
-  }
-  if (blockNow) {
-    if (Math.random() < 0.4) {
-      gmk.watered = true;
-      const soft = cands.filter(p => p[0] !== blockNow[0] || p[1] !== blockNow[1]);
-      if (soft.length) return gmkPick(soft, ta, me, 0.35, 40);
+    /* 一半以上的回合随机乱下，完全陪你玩 */
+    if (Math.random() < 0.6) {
+      gmk.watered = Math.random() < 0.35;
+      return pickOne(cands) || [7, 7];
     }
-    return blockNow;
+    if (blockNow && Math.random() < 0.4) return blockNow;
+    return gmkPick(cands, ta, me, 0.5, 30);
   }
-  if (Math.random() < 0.3) gmk.watered = true;
-  return gmkPick(cands, ta, me, gmk.watered ? 0.4 : 0.55, gmk.watered ? 40 : 16);
+
+  /* ---------- 宠溺模式 ---------- */
+  /* 1) 进攻端放水：自己能连五也大概率不下，故意去走废棋 */
+  if (winNow) {
+    if (Math.random() < 0.8) {
+      gmk.watered = true;
+      return gmkWasteMove();
+    }
+    return winNow;
+  }
+
+  /* 2) 防守端放水：玩家冲四 / 双活三时，80% 假装没看见 */
+  const crisis = !!blockNow || gmkOpenThreeGroups(me) >= 2;
+  if (crisis) {
+    if (Math.random() < 0.8) {
+      gmk.watered = true;
+      return gmkWasteMove();
+    }
+    if (blockNow) return blockNow;
+    const liveThrees = gmkLiveThreePoints(me);
+    if (liveThrees.length) {
+      return liveThrees.sort((a, b) => gmkEvalPoint(b[0], b[1], me) - gmkEvalPoint(a[0], a[1], me))[0];
+    }
+    return gmkPick(cands, ta, me, 0.8, 6);
+  }
+
+  /* 3) 主动失误：没有危机也常走一步废棋 */
+  if (Math.random() < 0.3) {
+    gmk.watered = true;
+    return gmkWasteMove();
+  }
+
+  /* 4) 轻微防守：只有玩家出现明牌三连时才勉强堵一下 */
+  const threes = gmkLiveThreePoints(me);
+  if (threes.length) {
+    return threes.sort((a, b) => gmkEvalPoint(b[0], b[1], me) - gmkEvalPoint(a[0], a[1], me))[0];
+  }
+  /* 其余情况正常进攻，但防守权重压得很低，不主动掐你的活路 */
+  return gmkPick(cands, ta, me, 0.45, 22);
 }
 
 /* 终局：状态文案 + 内置结算台词 + 聊天里一条 TA 的普通消息 + 棋盘上的半透明结算卡片 */
@@ -15644,6 +15758,535 @@ function gmkUndo() {
   gmkUpdateStatus();
   gmkRefreshUndoBtn();
   gmkSay(GMK_LINES.undo);
+}
+
+
+/* =========================================================
+ * 赛博羽毛球（Canvas · 三档 AI · 发光霓虹球场）
+ * 物理坐标 = CSS 像素，Y 轴向下；球拍底部玩家 / 顶部 TA
+ * ========================================================= */
+const BDM_MODES = {
+  /* 认真：轨迹预判 + 超高移速 + 零误差 + 略宽的接球判定 */
+  serious: { label: '认真模式', speed: 1100, error: 0, daze: 0, wander: 0, padBonus: 12, note: '预判落点，全力以赴。' },
+  pet: { label: '宠溺模式', speed: 260, error: 40, daze: 0.3, wander: 0.02, padBonus: 0, note: '偶尔走神，让你赢几球。' },
+  casual: { label: '随性模式', speed: 150, error: 80, daze: 0.45, wander: 0.07, padBonus: 0, note: '反应慢半拍，纯粹陪你玩。' }
+};
+const BDM_LINES = {
+  serious: ['失误了，再来一局。', '这球角度很刁，我认。'],
+  pet: ['哎呀，手滑了没接住。', '球太快了，我没跟上。'],
+  casual: ['这球飞得太刁钻了。', '算你厉害，我还没热身呢。'],
+  winMe: ['这局你赢了，抱一下。', '打得真好，下次我还陪你。'],
+  winTa: ['承让啦，下局我会认真一点。', '嘿嘿，这局我先拿下了。']
+};
+/* 认真模式本回合判定为失误时的吐槽，专门用于掩饰 10% 的放水 */
+const BDM_MISTAKE_LINES = ['咳，刚才手滑了一下', '这球有点飘', '被你抓到破绽了'];
+const BDM_MAX_SCORE = 3;
+const bdm = {
+  mode: 'pet',
+  W: 360, H: 560, ctx: null, canvas: null,
+  running: false, over: false, raf: 0, last: 0,
+  me: 0, ta: 0,
+  baseSpeed: 400, speed: 400,
+  ball: { x: 180, y: 300, vx: 0, vy: 0, r: 7 },
+  trail: [],
+  padW: 84, padH: 12,
+  mePad: { x: 180, y: 500, w: 84, h: 12 },
+  taPad: { x: 180, y: 60, w: 84, h: 12 },
+  aiTarget: 180, aiNextTarget: 0, aiFreezeUntil: 0,
+  dazeRolled: false,
+  serving: true, serveAt: 0, serveTo: 'ta',
+  mistake: false,        /* 本回合是否触发认真模式的 10% 失误 */
+  mistakeOffset: 0,      /* 失误时的预判偏移（±40~70px） */
+  mistakeDelayUntil: 0,  /* 失误时的 300ms 反应迟滞 */
+  slip: false,           /* 本回合若碰到球，是否手滑不反弹（50%） */
+  bubbleTimer: null,
+  gen: 0
+};
+
+function bdmStop() {
+  bdm.running = false;
+  if (bdm.raf) { cancelAnimationFrame(bdm.raf); bdm.raf = 0; }
+  if (bdm.bubbleTimer) { clearTimeout(bdm.bubbleTimer); bdm.bubbleTimer = null; }
+}
+
+function bdmReset() {
+  bdm.me = 0;
+  bdm.ta = 0;
+  bdm.over = false;
+  bdm.speed = bdm.baseSpeed;
+  bdm.trail = [];
+  bdm.dazeRolled = false;
+  bdm.aiFreezeUntil = 0;
+  bdm.aiNextTarget = 0;
+  bdm.aiTarget = bdm.W / 2;
+  bdm.mistake = false;
+  bdm.mistakeOffset = 0;
+  bdm.mistakeDelayUntil = 0;
+  bdm.slip = false;
+  bdm.mePad.x = bdm.W / 2;
+  bdm.taPad.x = bdm.W / 2;
+  bdm.mePad.y = bdm.H - 46;
+  bdm.taPad.y = 46;
+  bdm.ball.x = bdm.W / 2;
+  bdm.ball.y = bdm.H * 0.68;
+  bdm.ball.vx = 0;
+  bdm.ball.vy = 0;
+  bdm.serving = true;
+  bdm.serveAt = Date.now() + 900;
+  bdm.serveTo = 'ta';
+}
+
+function bdmFit(canvas) {
+  const stage = canvas.parentElement;
+  const rect = stage ? stage.getBoundingClientRect() : { width: 360, height: 560 };
+  const W = Math.max(240, Math.round(rect.width || 360));
+  const H = Math.max(320, Math.round(rect.height || 560));
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  bdm.W = W;
+  bdm.H = H;
+  bdm.canvas = canvas;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  bdm.ctx = ctx;
+  bdm.padW = clamp(Math.round(W * 0.24), 64, 120);
+  bdm.mePad.w = bdm.padW;
+  bdm.taPad.w = bdm.padW;
+  bdm.mePad.y = H - 46;
+  bdm.taPad.y = 46;
+  bdm.mePad.x = clamp(bdm.mePad.x || W / 2, bdm.padW / 2 + 8, W - bdm.padW / 2 - 8);
+  bdm.taPad.x = clamp(bdm.taPad.x || W / 2, bdm.padW / 2 + 8, W - bdm.padW / 2 - 8);
+  bdm.ball.r = clamp(Math.round(W * 0.018), 6, 10);
+  bdm.baseSpeed = clamp(Math.round(H * 0.66), 320, 560);
+  bdm.speed = bdm.baseSpeed;
+  if (!bdm.running) {
+    bdm.ball.x = clamp(bdm.ball.x || W / 2, 20, W - 20);
+    bdm.ball.y = bdm.serving ? bdm.ball.y : H * 0.62;
+  }
+}
+
+/* ---------- 得分 / 发球 / 结算 ---------- */
+function bdmUpdateScoreUI() {
+  const a = document.getElementById('bdmMe');
+  const b = document.getElementById('bdmTa');
+  if (a) a.textContent = String(bdm.me);
+  if (b) b.textContent = String(bdm.ta);
+}
+
+function bdmPrepareServe(scorer) {
+  bdm.serving = true;
+  bdm.serveAt = Date.now() + 1000;
+  bdm.serveTo = scorer === 'me' ? 'ta' : 'me';
+  bdm.ball.x = bdm.W / 2;
+  bdm.ball.y = scorer === 'me' ? bdm.H * 0.68 : bdm.H * 0.32;
+  bdm.ball.vx = 0;
+  bdm.ball.vy = 0;
+  bdm.speed = bdm.baseSpeed;
+  bdm.dazeRolled = false;
+  bdm.aiFreezeUntil = 0;
+  bdm.aiNextTarget = 0;
+  bdm.trail = [];
+}
+
+function bdmLaunchServe() {
+  bdm.serving = false;
+  const dir = bdm.serveTo === 'ta' ? -1 : 1;
+  bdm.ball.vx = (Math.random() * 2 - 1) * 110;
+  bdm.ball.vy = dir * bdm.speed;
+  bdm.trail = [];
+  bdmRollMistake();      /* 每个回合开始时掷一次失误判定 */
+}
+
+/* 每回合开端的失误判定：仅认真模式生效，10% 概率本回合放水。
+ * 触发后组合三种表现：预判偏移 ±40~70px、300ms 反应迟滞、50% 概率碰球也漏。 */
+function bdmRollMistake() {
+  bdm.mistake = false;
+  bdm.mistakeOffset = 0;
+  bdm.mistakeDelayUntil = 0;
+  bdm.slip = false;
+  if (bdm.mode !== 'serious') return false;
+  if (Math.random() >= 0.1) return false;
+  bdm.mistake = true;
+  bdm.mistakeOffset = (Math.random() < 0.5 ? -1 : 1) * randInt(40, 70);
+  bdm.mistakeDelayUntil = Date.now() + 300;
+  bdm.slip = Math.random() < 0.5;
+  return true;
+}
+
+function bdmPoint(who) {
+  if (who === 'me') {
+    bdm.me++;
+    /* AI 漏球：认真模式失误时用专属吐槽，其它模式沿用各自台词 */
+    const pool = (bdm.mode === 'serious' && bdm.mistake)
+      ? BDM_MISTAKE_LINES
+      : (BDM_LINES[bdm.mode] || BDM_LINES.pet);
+    bdmSay(pool);
+  } else {
+    bdm.ta++;
+  }
+  bdmUpdateScoreUI();
+  if (bdm.me >= BDM_MAX_SCORE || bdm.ta >= BDM_MAX_SCORE) {
+    bdmFinish();
+    return;
+  }
+  bdmPrepareServe(who);
+}
+
+/* 结算语：优先字卡库，抽不到或为空时用内置台词兜底 */
+function bdmResultSpeech(won) {
+  let txt = '';
+  try {
+    const rid = state.activeRoleId;
+    if (rid && roleById(rid)) {
+      txt = String(composeCardText(rid, { key: 'bdm-' + (won ? 'win' : 'lose') }) || '').trim();
+    }
+  } catch (e) { txt = ''; }
+  if (!txt) txt = pickOne(won ? BDM_LINES.winMe : BDM_LINES.winTa);
+  return txt;
+}
+
+function bdmFinish() {
+  bdm.over = true;
+  bdmStop();
+  const won = bdm.me > bdm.ta;
+  const speech = bdmResultSpeech(won);
+  bdmDraw();
+  bdmShowResult(won, speech);
+  /* 与五子棋一致：结算台词发进聊天，留存这局的收尾 */
+  const rid = state.activeRoleId;
+  if (rid && roleById(rid)) {
+    pushDreamMessage(rid, { type: 'text', sender: 'ta', content: speech, text: speech });
+    renderChatIf(rid);
+  }
+}
+
+function bdmShowResult(won, speech) {
+  const ov = document.getElementById('bdmOverlay');
+  if (!ov) return;
+  ov.innerHTML = `
+    <div class="bdm-card">
+      <div class="t">${won ? '你赢了 🎉' : esc(taName()) + ' 赢了'}</div>
+      <div class="sc">我 ${bdm.me} : ${bdm.ta} ${esc(taName())}</div>
+      <div class="s">「${esc(speech)}」</div>
+      <div class="bdm-actions">
+        <button id="bdmQuit">退出游戏</button>
+        <button id="bdmRestart">重新开始</button>
+      </div>
+    </div>`;
+  ov.classList.add('show');
+  const quit = document.getElementById('bdmQuit');
+  const again = document.getElementById('bdmRestart');
+  if (quit) quit.addEventListener('click', bdmExit);
+  if (again) again.addEventListener('click', () => {
+    ov.classList.remove('show');
+    bdmStart();
+  });
+}
+
+function bdmExit() {
+  bdmStop();
+  currentRoute = { page: 'sub', name: 'play' };
+  applyRoute();
+}
+
+/* 轨迹预判：球以当前 vx/vy 飞到 targetY 那一排时的 X 坐标（含左右墙反弹）
+ * 水平位移用三角波折叠到 [r, W-r]：每次撞墙只反转方向、不损失速度 */
+function bdmPredictX(targetY) {
+  const b = bdm.ball, r = b.r;
+  if (b.vy >= -1) return b.x;                 /* 球在往下飞：没有落点可预判 */
+  const t = (b.y - targetY) / (-b.vy);
+  if (!isFinite(t) || t <= 0) return b.x;
+  const span = bdm.W - 2 * r;
+  if (span <= 0) return b.x;
+  let x = b.x + b.vx * t - r;
+  const period = span * 2;
+  const m = ((x % period) + period) % period;
+  x = m > span ? period - m : m;
+  return clamp(x + r, r, bdm.W - r);
+}
+
+/* ---------- AI ---------- */
+function bdmStepAI(dt, now) {
+  const cfg = BDM_MODES[bdm.mode] || BDM_MODES.pet;
+  if (now < bdm.aiFreezeUntil) return;   /* 发呆中：慢半拍，不追球 */
+  if (bdm.mistake && now < bdm.mistakeDelayUntil) return;   /* 认真模式失误：反应迟滞 300ms */
+  if (bdm.mode === 'serious') {
+    /* 认真模式：每帧直接瞄准预判落点，球往下飞时才退回追球身位 */
+    const predicted = bdm.ball.vy < 0 ? bdmPredictX(bdm.taPad.y) : bdm.ball.x;
+    bdm.aiTarget = predicted + (bdm.mistake ? bdm.mistakeOffset : 0);
+    bdm.aiNextTarget = 0;
+  } else if (now > bdm.aiNextTarget) {
+    bdm.aiNextTarget = now + randInt(500, 900);
+    bdm.aiTarget = bdm.ball.x + (Math.random() * 2 - 1) * cfg.error;
+    /* 随性模式会突然自己乱跑 */
+    if (Math.random() < cfg.wander) bdm.aiTarget = randInt(30, bdm.W - 30);
+  }
+  const half = bdm.padW / 2 + 8;
+  const target = clamp(bdm.aiTarget, half, bdm.W - half);
+  const diff = target - bdm.taPad.x;
+  /* 认真模式：移速至少略快于球的横向速度，杜绝“看得见追不上” */
+  const speed = bdm.mode === 'serious'
+    ? clamp(Math.max(cfg.speed, Math.abs(bdm.ball.vx) * 1.2), 0, 1600)
+    : cfg.speed;
+  const maxStep = speed * dt;
+  bdm.taPad.x = clamp(bdm.taPad.x + clamp(diff, -maxStep, maxStep), half, bdm.W - half);
+}
+
+/* ---------- 物理 ---------- */
+function bdmBounce(pad, dir) {
+  const off = clamp((bdm.ball.x - pad.x) / (pad.w / 2), -0.92, 0.92);
+  bdm.speed = clamp(bdm.speed * 1.025, bdm.baseSpeed, bdm.baseSpeed * 1.7);
+  bdm.ball.vx = Math.sin(off * 0.9) * bdm.speed;
+  bdm.ball.vy = dir * Math.cos(off * 0.9) * bdm.speed;
+  bdm.ball.y = pad.y + dir * (pad.h / 2 + bdm.ball.r + 1);
+}
+
+function bdmStep(dt, now) {
+  const cfg = BDM_MODES[bdm.mode] || BDM_MODES.pet;
+  const b = bdm.ball;
+  const r = b.r;
+
+  b.x += b.vx * dt;
+  b.y += b.vy * dt;
+
+  /* 左右墙反弹 */
+  if (b.x - r < 0) { b.x = r; b.vx = Math.abs(b.vx); }
+  else if (b.x + r > bdm.W) { b.x = bdm.W - r; b.vx = -Math.abs(b.vx); }
+
+  bdm.trail.push({ x: b.x, y: b.y });
+  if (bdm.trail.length > 9) bdm.trail.shift();
+
+  /* 球飞向 TA 时，按模式掷一次「发呆」判定 */
+  if (!bdm.dazeRolled && b.vy < 0 && b.y < bdm.H * 0.5) {
+    bdm.dazeRolled = true;
+    if (Math.random() < cfg.daze) bdm.aiFreezeUntil = now + 600;
+  }
+
+  bdmStepAI(dt, now);
+
+  /* 玩家球拍：向上弹 */
+  const mp = bdm.mePad, tp = bdm.taPad;
+  if (b.vy > 0 && Math.abs(b.x - mp.x) <= mp.w / 2 + r &&
+      b.y + r >= mp.y - mp.h / 2 && b.y - r <= mp.y + mp.h / 2) {
+    bdmBounce(mp, -1);
+  }
+  /* TA 球拍：向下弹；认真模式额外加宽判定，避免边缘擦碰漏球 */
+  if (b.vy < 0 && Math.abs(b.x - tp.x) <= tp.w / 2 + r + (cfg.padBonus || 0) &&
+      b.y - r <= tp.y + tp.h / 2 && b.y + r >= tp.y - tp.h / 2) {
+    if (bdm.mistake && bdm.slip) {
+      bdm.slip = false;   /* 本回合只手滑一次，之后恢复真实水平 */
+    } else {
+      bdmBounce(tp, 1);
+    }
+  }
+
+  /* 出界得分：顶部飞出玩家得分，底部飞出 TA 得分 */
+  if (b.y < -r * 2) { bdmPoint('me'); return; }
+  if (b.y > bdm.H + r * 2) { bdmPoint('ta'); return; }
+}
+
+/* ---------- 绘制 ---------- */
+function bdmDraw() {
+  const ctx = bdm.ctx;
+  if (!ctx) return;
+  const W = bdm.W, H = bdm.H;
+  ctx.clearRect(0, 0, W, H);
+
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#0a1220');
+  bg.addColorStop(0.5, '#070c16');
+  bg.addColorStop(1, '#0a1220');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  /* 暗网格 */
+  ctx.strokeStyle = 'rgba(45,226,255,.06)';
+  ctx.lineWidth = 1;
+  const gap = 34;
+  for (let x = gap; x < W; x += gap) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  for (let y = gap; y < H; y += gap) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+  /* 发光球网 */
+  const netY = H / 2;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(45,226,255,.9)';
+  ctx.shadowColor = '#2de2ff';
+  ctx.shadowBlur = 16;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(12, netY);
+  ctx.lineTo(W - 12, netY);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = 'rgba(45,226,255,.28)';
+  ctx.lineWidth = 1;
+  for (let x = 18; x < W - 12; x += 16) {
+    ctx.beginPath();
+    ctx.moveTo(x, netY - 5);
+    ctx.lineTo(x, netY + 5);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  /* 球拍 */
+  const drawPad = (pad, color) => {
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 14;
+    ctx.fillStyle = color;
+    const h = pad.h, w = pad.w;
+    const x = pad.x - w / 2, y = pad.y - h / 2;
+    const rr = h / 2;
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.lineTo(x + w - rr, y);
+    ctx.arc(x + w - rr, y + rr, rr, -Math.PI / 2, Math.PI / 2);
+    ctx.lineTo(x + rr, y + h);
+    ctx.arc(x + rr, y + rr, rr, Math.PI / 2, -Math.PI / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  };
+  drawPad(bdm.mePad, '#2de2ff');
+  drawPad(bdm.taPad, '#ff6bd6');
+
+  /* 拖尾 */
+  bdm.trail.forEach((p, i) => {
+    const a = (i + 1) / bdm.trail.length * 0.28;
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(45,226,255,' + a.toFixed(3) + ')';
+    ctx.arc(p.x, p.y, bdm.ball.r * (0.5 + i / bdm.trail.length * 0.6), 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  /* 球 */
+  ctx.save();
+  ctx.shadowColor = '#bff8ff';
+  ctx.shadowBlur = 18;
+  const g = ctx.createRadialGradient(bdm.ball.x, bdm.ball.y, 0, bdm.ball.x, bdm.ball.y, bdm.ball.r * 2);
+  g.addColorStop(0, '#ffffff');
+  g.addColorStop(0.55, '#8ff4ff');
+  g.addColorStop(1, 'rgba(45,226,255,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(bdm.ball.x, bdm.ball.y, bdm.ball.r * 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  /* 发球倒计时 */
+  if (bdm.serving && !bdm.over) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(159,179,204,.75)';
+    ctx.font = '600 12px -apple-system,"PingFang SC",sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('准备发球…', W / 2, netY + (bdm.serveTo === 'ta' ? 56 : -44));
+    ctx.restore();
+  }
+}
+
+/* ---------- 主循环 ---------- */
+function bdmLoop(ts) {
+  if (!bdm.running) return;
+  const canvas = document.getElementById('badmintonCanvas');
+  if (!canvas) { bdmStop(); return; }
+  if (canvas.clientWidth && Math.abs(canvas.clientWidth - bdm.W) > 2) bdmFit(canvas);
+  if (!bdm.last) bdm.last = ts;
+  let dt = (ts - bdm.last) / 1000;
+  bdm.last = ts;
+  dt = clamp(dt, 0, 0.033);
+  if (bdm.serving) {
+    if (Date.now() >= bdm.serveAt) bdmLaunchServe();
+  } else {
+    bdmStep(dt, Date.now());
+  }
+  bdmDraw();
+  if (!bdm.running) return;
+  bdm.raf = requestAnimationFrame(bdmLoop);
+}
+
+function bdmStart() {
+  bdmStop();
+  bdm.gen++;
+  bdmReset();
+  bdmUpdateScoreUI();
+  bdm.running = true;
+  bdm.last = 0;
+  const ov = document.getElementById('bdmOverlay');
+  if (ov) ov.classList.remove('show');
+  bdm.raf = requestAnimationFrame(bdmLoop);
+}
+
+function bdmSay(pool) {
+  const el = document.getElementById('bdmBubble');
+  if (!el || !Array.isArray(pool) || !pool.length) return;
+  el.textContent = pickOne(pool);
+  el.classList.add('show');
+  if (bdm.bubbleTimer) clearTimeout(bdm.bubbleTimer);
+  bdm.bubbleTimer = setTimeout(() => {
+    bdm.bubbleTimer = null;
+    const n = document.getElementById('bdmBubble');
+    if (n) n.classList.remove('show');
+  }, 2800);
+}
+
+function renderBadmintonPage() {
+  bdmStop();
+  const role = roleById(state.activeRoleId) || state.roles[0];
+  const cfg = BDM_MODES[bdm.mode] || BDM_MODES.pet;
+  const body = subShell('赛博羽毛球', `
+    <div class="bdm-wrap">
+      <div class="bdm-modes">
+        ${Object.keys(BDM_MODES).map(k =>
+          `<button class="bdm-mode ${bdm.mode === k ? 'active' : ''}" data-bdmmode="${k}">${BDM_MODES[k].label}</button>`).join('')}
+      </div>
+      <div class="bdm-ta">
+        <span class="gmk-ava">${role ? roleAvatarHTML(role, 30) : avatarHTML('🙂', 30)}</span>
+        <div class="gmk-bubble" id="bdmBubble"></div>
+      </div>
+      <div class="bdm-stage">
+        <div class="bdm-score">我 <b id="bdmMe">0</b><i>:</i><b id="bdmTa">0</b> ${esc(taName())}</div>
+        <canvas id="badmintonCanvas"></canvas>
+        <div class="bdm-overlay" id="bdmOverlay"></div>
+      </div>
+      <div class="bdm-tip" id="bdmTip">左右滑动接球 · 先到 ${BDM_MAX_SCORE} 分获胜 · ${esc(cfg.note)}</div>
+    </div>`);
+  const canvas = $('#badmintonCanvas', body);
+  if (!canvas) return;
+  bdmFit(canvas);
+
+  const moveTo = clientX => {
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const half = bdm.padW / 2 + 6;
+    bdm.mePad.x = clamp(x, half, bdm.W - half);
+  };
+  canvas.addEventListener('mousemove', e => moveTo(e.clientX));
+  canvas.addEventListener('touchmove', e => {
+    e.preventDefault();                     /* 阻止页面跟着滚动 */
+    const t = e.touches && e.touches[0];
+    if (t) moveTo(t.clientX);
+  }, { passive: false });
+  canvas.addEventListener('touchstart', e => {
+    const t = e.touches && e.touches[0];
+    if (t) moveTo(t.clientX);
+  }, { passive: true });
+
+  $$('[data-bdmmode]', body).forEach(btn => btn.addEventListener('click', () => {
+    const k = btn.dataset.bdmmode;
+    if (!BDM_MODES[k] || bdm.mode === k) return;
+    bdm.mode = k;
+    $$('[data-bdmmode]', body).forEach(x => x.classList.toggle('active', x.dataset.bdmmode === k));
+    const tip = $('#bdmTip', body);
+    if (tip) tip.textContent = `左右滑动接球 · 先到 ${BDM_MAX_SCORE} 分获胜 · ${BDM_MODES[k].note}`;
+    showToast('已切换为' + BDM_MODES[k].label);
+    bdmStart();
+  }));
+
+  bdmStart();
+  bdmDraw();
 }
 
 
@@ -15958,11 +16601,67 @@ const STATUS_WORDS = {
 function statusWordCat(key) {
   return STATUS_WORDS[STATUS_CAT_KEYS.includes(String(key)) ? String(key) : 'still'];
 }
-/* 分类权重：静止 45% / 轻度 35% / 剧烈 20% */
-function pickStatusCategory() {
+/* 时间段划分：deep 23:00-06:00 / morning 06:00-09:00 / day 09:00-18:00 / night 18:00-23:00 */
+function statusTimeSlot(hour) {
+  const h = Number.isFinite(Number(hour)) ? Number(hour) : new Date().getHours();
+  if (h >= 23 || h < 6) return 'deep';
+  if (h < 9) return 'morning';
+  if (h < 18) return 'day';
+  return 'night';
+}
+/* 各时段分类权重：深夜只允许静止类；早晨可晨跑；白天三类齐全；夜晚剧烈活动明显降低 */
+const STATUS_SLOT_WEIGHTS = {
+  deep: { still: 1, light: 0, heavy: 0 },
+  morning: { still: 0.2, light: 0.55, heavy: 0.25 },
+  day: { still: 0.4, light: 0.35, heavy: 0.25 },
+  night: { still: 0.5, light: 0.4, heavy: 0.1 }
+};
+/* 时段专属词条：只覆盖需要区分的部分，未列出的分类回落到基础词库 */
+const STATUS_SLOT_WORDS = {
+  deep: {
+    still: {
+      status: ['睡意朦胧', '呼吸很轻', '安静得不像话', '困得直打哈欠'],
+      activity: ['在睡觉', '躺在床上看手机', '发呆', '听助眠音乐', '刚睡着不久', '裹着被子赖床']
+    }
+  },
+  morning: {
+    still: { activity: ['刚醒还在赖床', '坐在床边发呆', '在喝温水'] },
+    light: { activity: ['在洗漱', '在买早餐', '在通勤路上', '在整理包', '在热牛奶'] },
+    heavy: { activity: ['在晨跑', '在骑车赶去上班'] }
+  },
+  day: {
+    still: { activity: ['在开会', '在看书', '坐着喝咖啡', '在写东西', '在窗边看风景'] },
+    light: { activity: ['在散步', '在逛超市', '在收拾房间', '在买咖啡', '在逛书店'] },
+    heavy: { activity: ['在跑步', '在健身', '在打球', '在爬楼梯', '在骑车'] }
+  },
+  night: {
+    still: { activity: ['窝在沙发上看电视', '在泡脚', '靠在床头刷手机', '在听歌'] },
+    light: { activity: ['在散步', '下班回家路上', '在厨房热夜宵', '在遛狗'] },
+    heavy: { activity: ['在夜跑', '在健身房加练'] }
+  }
+};
+/* 取某分类在当前时段的动态词条；非深夜段一律剔除「睡觉」类词条，防止早晨/白天出现睡觉 */
+function statusActivityPool(catKey, slot) {
+  const base = statusWordCat(catKey).activity;
+  const sp = STATUS_SLOT_WORDS[slot] && STATUS_SLOT_WORDS[slot][catKey];
+  const pool = (sp && Array.isArray(sp.activity) && sp.activity.length) ? sp.activity : base;
+  if (slot === 'deep') return pool;
+  const safe = pool.filter(w => !/睡觉|睡着/.test(w));
+  return safe.length ? safe : ['在忙自己的事'];
+}
+/* 取某分类在当前时段的状态词；深夜使用专属的困倦描述 */
+function statusMoodPool(catKey, slot) {
+  const base = statusWordCat(catKey).status;
+  const sp = STATUS_SLOT_WORDS[slot] && STATUS_SLOT_WORDS[slot][catKey];
+  return (sp && Array.isArray(sp.status) && sp.status.length) ? sp.status : base;
+}
+/* 分类权重：由当前时间段决定（默认按真实系统时间） */
+function pickStatusCategory(slot) {
+  const key = slot || statusTimeSlot();
+  const w = STATUS_SLOT_WEIGHTS[key] || STATUS_SLOT_WEIGHTS.day;
   const r = Math.random();
-  if (r < 0.45) return 'still';
-  if (r < 0.80) return 'light';
+  if (r < (w.still || 0)) return 'still';
+  if (r < (w.still || 0) + (w.light || 0)) return 'light';
   return 'heavy';
 }
 /* 本地日期键 YYYY-MM-DD：用于判断累计数据是否跨天 */
@@ -15972,13 +16671,16 @@ function statusDateKey(ts) {
 }
 
 /* 生成一份全新的状态快照：
- * 1) 随机分类 → 抽动态与状态词；
+ * 0) 先按当前小时确定时间段，再按该时段的权重抽分类（深夜只可能抽到静止类）；
+ * 1) 从「时段专属词条」里抽动态与状态词，早晨/白天/夜晚永不出现「在睡觉」；
  * 2) 距离与分类匹配（静止类有 35% 概率为 0 米 = 在你身边）；
- * 3) 即时数据（心率/呼吸/血氧）按分类区间重新生成；
- * 4) 累计数据（步数/活动时长）比对日期：同一天只在旧值上累加，跨天重置为新的随机基础值。 */
-function generateStatusSnapshot(prev) {
+ * 3) 即时数据（心率/呼吸/血氧）按分类区间生成；深夜额外锁定 50~65 的低心率、步数与活动时长归 0；
+ * 4) 累计数据（步数/活动时长）比对日期：同一天只在旧值上累加，跨天重置为新的随机基础值。
+ * hour 参数仅供内部复用与自测；不传时读取真实系统时间。 */
+function generateStatusSnapshot(prev, hour) {
   const p = (prev && typeof prev === 'object') ? prev : {};
-  const catKey = pickStatusCategory();
+  const slot = statusTimeSlot(hour);
+  const catKey = pickStatusCategory(slot);
   const cat = statusWordCat(catKey);
   const today = statusDateKey();
   const sameDay = String(p.statDate || '') === today;
@@ -15989,15 +16691,26 @@ function generateStatusSnapshot(prev) {
   else distance = randInt(cat.distance[0], cat.distance[1]);
   distance = clamp(distance, 0, 500);
 
-  const activity = pickOne(cat.activity);
-  let status = pickOne(cat.status);
+  const activity = pickOne(statusActivityPool(catKey, slot));
+  let status = pickOne(statusMoodPool(catKey, slot));
   if (distance === 0) status = '在你身边';   /* 0 米固定显示「在你身边」 */
 
-  /* 累计数据：同一天只增不减；跨天用新的随机基础值 + 本次新增 */
-  const baseSteps = sameDay ? Math.max(0, Number(p.steps) || 0) : randInt(cat.stepBase[0], cat.stepBase[1]);
-  const steps = Math.min(200000, baseSteps + randInt(cat.stepAdd[0], cat.stepAdd[1]));
-  const baseMins = sameDay ? Math.max(0, Number(p.activeMinutes) || 0) : randInt(cat.minBase[0], cat.minBase[1]);
-  const activeMinutes = Math.min(1440, baseMins + randInt(cat.minAdd[0], cat.minAdd[1]));
+  let steps, activeMinutes, heartRate, breathRate;
+  if (slot === 'deep') {
+    /* 深夜/凌晨：只可能静止，健康数据强制锁定为睡眠区间，绝不出现运动量 */
+    steps = 0;
+    activeMinutes = 0;
+    heartRate = randInt(50, 65);
+    breathRate = randInt(12, 14);
+  } else {
+    /* 累计数据：同一天只增不减；跨天用新的随机基础值 + 本次新增 */
+    const baseSteps = sameDay ? Math.max(0, Number(p.steps) || 0) : randInt(cat.stepBase[0], cat.stepBase[1]);
+    steps = Math.min(200000, baseSteps + randInt(cat.stepAdd[0], cat.stepAdd[1]));
+    const baseMins = sameDay ? Math.max(0, Number(p.activeMinutes) || 0) : randInt(cat.minBase[0], cat.minBase[1]);
+    activeMinutes = Math.min(1440, baseMins + randInt(cat.minAdd[0], cat.minAdd[1]));
+    heartRate = randInt(cat.hr[0], cat.hr[1]);
+    breathRate = randInt(cat.rr[0], cat.rr[1]);
+  }
 
   const now = Date.now();
   return {
@@ -16008,8 +16721,8 @@ function generateStatusSnapshot(prev) {
     category: catKey,
     steps,
     activeMinutes,
-    heartRate: randInt(cat.hr[0], cat.hr[1]),
-    breathRate: randInt(cat.rr[0], cat.rr[1]),
+    heartRate,
+    breathRate,
     bloodOxygen: randInt(cat.spo2[0], cat.spo2[1]),
     statDate: today,
     lastStatusRefreshTime: now,
