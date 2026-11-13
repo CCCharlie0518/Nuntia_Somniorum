@@ -4534,6 +4534,21 @@ body.voice-recording *{
   transition:transform .12s ease,box-shadow .12s ease;
 }
 .hm-room:active{transform:scale(.975);box-shadow:0 2px 8px rgba(24,44,74,.06);}
+/* 阳台有成熟作物没看过的红点（桌面家园图标 / 阳台卡片 / 底部桌面 Tab 共用同一视觉） */
+.hm-room{position:relative;}
+.hm-room-dot{
+  position:absolute;top:10px;right:10px;width:8px;height:8px;border-radius:50%;
+  background:#FF3B30;box-shadow:0 0 0 2px #fff;
+}
+.home-app .app-dot{
+  position:absolute;top:6px;right:16px;width:9px;height:9px;border-radius:50%;
+  background:#FF3B30;box-shadow:0 0 0 1.5px #fff;z-index:2;
+}
+.tab .tab-dot{
+  position:absolute;top:3px;right:calc(50% - 16px);width:7px;height:7px;border-radius:50%;
+  background:#FF3B30;box-shadow:0 0 0 1.5px #fff;
+}
+#tabbar .tab{position:relative;}
 .hm-room-ic{
   width:40px;height:40px;border-radius:13px;padding:9px;margin-bottom:2px;
   color:var(--primary);background:rgba(18,183,245,.10);
@@ -4767,6 +4782,16 @@ body.bl-watering,body.bl-watering *{cursor:none !important;}
 }
 .hk-src.ta{background:rgba(167,139,250,.14);color:#8b5cf6;}
 .hk-src.me{background:rgba(18,183,245,.12);color:#0a9bd4;}
+/* 阳台来源：绿色系，和「我买的 / TA买的」区分开 */
+.hk-src.balcony{background:rgba(52,199,89,.14);color:#15803D;}
+/* 数量角标：半透明底 + 白字，贴在 Emoji 左上角（右上角是删除按钮） */
+.hk-count{
+  position:absolute;left:4px;top:4px;z-index:1;
+  min-width:18px;height:15px;padding:0 4px;border-radius:8px;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:rgba(28,28,30,.55);color:#fff;font-size:9.5px;font-weight:700;
+  line-height:15px;letter-spacing:.2px;pointer-events:none;
+}
 .hk-ing-del{
   position:absolute;right:4px;top:4px;width:17px;height:17px;border-radius:50%;
   display:grid;place-items:center;font-size:8px;color:#C7CCD5;

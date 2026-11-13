@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v9.1.0';
+const APP_VERSION = 'v9.1.1';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -6437,7 +6437,7 @@ function renderHomePage() {
 
   const greet = now.getHours() < 5 ? '夜深了，注意休息' : now.getHours() < 12 ? '早上好' : now.getHours() < 18 ? '下午好' : '晚上好';
   const unreadLetterCount = state.letters.filter(l => !l.read).length;
-  const appBtn = app => `<button class="home-app" data-happ="${app.route}"><div class="ic">${APP_ICONS[app.route] || APP_ICONS.settings}</div><div class="lb">${esc(app.label)}</div>${app.route === 'todo' && todoBadgeCount() > 0 ? `<span class="app-badge">${todoBadgeCount() > 99 ? '99+' : todoBadgeCount()}</span>` : ''}${app.route === 'letters' && unreadLetterCount > 0 ? `<span class="app-badge">${unreadLetterCount > 99 ? '99+' : unreadLetterCount}</span>` : ''}</button>`;
+  const appBtn = app => `<button class="home-app" data-happ="${app.route}"><div class="ic">${APP_ICONS[app.route] || APP_ICONS.settings}</div><div class="lb">${esc(app.label)}</div>${app.route === 'todo' && todoBadgeCount() > 0 ? `<span class="app-badge">${todoBadgeCount() > 99 ? '99+' : todoBadgeCount()}</span>` : ''}${app.route === 'letters' && unreadLetterCount > 0 ? `<span class="app-badge">${unreadLetterCount > 99 ? '99+' : unreadLetterCount}</span>` : ''}${app.route === 'readtogether' && homeBalconyUnread() ? '<span class="app-dot"></span>' : ''}</button>`;
 
   /* ===== 动态分页：按 totalPages 生成每页 section ===== */
   const totalPages = homePageTotal();
@@ -16578,8 +16578,10 @@ const STATUS_CAT_NAME = { still: '静止', light: '轻度活动', heavy: '剧烈
 const STATUS_WORDS = {
   still: {
     status: ['很安静', '有点想你', '在放空', '心神安定', '安静地陪着你', '懒懒的'],
-    activity: ['在开会', '在看书', '发呆', '在睡觉', '坐着喝咖啡', '在写东西', '戴着耳机听歌',
-      '在窗边看风景', '在整理明天的计划', '靠在沙发上休息'],
+    activity: ['在开会', '在看书', '发呆', '坐着喝咖啡', '在写东西', '戴着耳机听歌',
+      '在窗边看风景', '在整理明天的计划', '靠在沙发上休息',
+      '躺在床上看手机', '在床上发呆', '听助眠白噪音', '躺在床上看天花板',
+      '闭目养神', '在沙发上发呆', '坐着打盹（但没真睡）', '在听轻音乐', '看着窗外发呆'],
     distance: [5, 150],
     hr: [60, 80], rr: [12, 16], spo2: [98, 100],
     stepAdd: [10, 100], stepBase: [300, 900],
@@ -16626,8 +16628,10 @@ const STATUS_SLOT_WEIGHTS = {
 const STATUS_SLOT_WORDS = {
   deep: {
     still: {
-      status: ['睡意朦胧', '呼吸很轻', '安静得不像话', '困得直打哈欠'],
-      activity: ['在睡觉', '躺在床上看手机', '发呆', '听助眠音乐', '刚睡着不久', '裹着被子赖床']
+      status: ['呼吸很轻', '安静得不像话', '心神安定', '懒懒的', '安静地陪着你'],
+      activity: ['躺在床上看手机', '在床上发呆', '听助眠白噪音', '躺在床上看天花板',
+        '闭目养神', '在沙发上发呆', '坐着打盹（但没真睡）', '在听轻音乐', '看着窗外发呆',
+        '裹着被子发呆', '靠在床头刷手机', '发呆']
     }
   },
   morning: {
@@ -16646,16 +16650,17 @@ const STATUS_SLOT_WORDS = {
     heavy: { activity: ['在夜跑', '在健身房加练'] }
   }
 };
-/* 取某分类在当前时段的动态词条；非深夜段一律剔除「睡觉」类词条，防止早晨/白天出现睡觉 */
+/* 取某分类在当前时段的动态词条；非深夜段一律剔除睡眠类词条（睡觉/睡眠/睡着/梦乡），
+ * 防止早晨/白天出现睡觉；深夜段词库本身已清理为「清醒但安静」的活动，直接返回。 */
 function statusActivityPool(catKey, slot) {
   const base = statusWordCat(catKey).activity;
   const sp = STATUS_SLOT_WORDS[slot] && STATUS_SLOT_WORDS[slot][catKey];
   const pool = (sp && Array.isArray(sp.activity) && sp.activity.length) ? sp.activity : base;
   if (slot === 'deep') return pool;
-  const safe = pool.filter(w => !/睡觉|睡着/.test(w));
+  const safe = pool.filter(w => !/睡觉|睡眠|睡着|梦乡/.test(w));
   return safe.length ? safe : ['在忙自己的事'];
 }
-/* 取某分类在当前时段的状态词；深夜使用专属的困倦描述 */
+/* 取某分类在当前时段的状态词；深夜使用专属的清醒安静描述 */
 function statusMoodPool(catKey, slot) {
   const base = statusWordCat(catKey).status;
   const sp = STATUS_SLOT_WORDS[slot] && STATUS_SLOT_WORDS[slot][catKey];
@@ -16678,7 +16683,8 @@ function statusDateKey(ts) {
 
 /* 生成一份全新的状态快照：
  * 0) 先按当前小时确定时间段，再按该时段的权重抽分类（深夜只可能抽到静止类）；
- * 1) 从「时段专属词条」里抽动态与状态词，早晨/白天/夜晚永不出现「在睡觉」；
+ * 1) 从「时段专属词条」里抽动态与状态词，早晨/白天/夜晚永不出现睡眠类词条；
+ *    深夜段也只抽「清醒但安静」的活动（如在床上发呆、听助眠白噪音），不再出现睡觉；
  * 2) 距离与分类匹配（静止类有 35% 概率为 0 米 = 在你身边）；
  * 3) 即时数据（心率/呼吸/血氧）按分类区间生成；深夜额外锁定 50~65 的低心率、步数与活动时长归 0；
  * 4) 累计数据（步数/活动时长）比对日期：同一天只在旧值上累加，跨天重置为新的随机基础值。
@@ -18849,6 +18855,10 @@ const HOME_PLANT_STAGES = [
 ];
 const HOME_TA_WATER_GAP_MS = 3 * 3600000;      /* TA 帮忙浇水的最短间隔 */
 const HOME_TA_PICK_AWAY_MS = 8 * 3600000;      /* 离开超过 8 小时，成熟的花会被 TA 先摘走 */
+const HOME_TA_PLANT_GAP_MS = 6 * 3600000;      /* 上次访问超过 6 小时，TA 才会偷偷种东西 */
+const HOME_TA_PLANT_CHANCE = 0.4;              /* TA 偷偷种植的触发概率（40%） */
+const HOME_TA_OWN_PICK_CHANCE = 0.8;           /* TA 亲手种下且已成熟：TA 先摘走的概率（80%） */
+const HOME_MATURE_CHECK_MS = 60 * 1000;        /* 作物成熟检查间隔：每分钟一次 */
 const HOME_FLOWER_LOVE_LINES = [
   '阳台上开得最好的那朵，我摘给你。',
   '看着它的时候想到你，就摘下来了。',
@@ -18936,6 +18946,10 @@ function homeDefaultState() {
     balconySlots: [null, null, null],
     customSeeds: [],
     lastBalconyTaWaterAt: 0,
+    /* 上一次进入【家园】/【阳台】的时间：TA 偷偷种植按这个时间算间隔 */
+    lastBalconyVisitAt: 0,
+    /* 阳台有成熟作物但还没进阳台看过：桌面家园图标 / 阳台卡片 / 底部 Tab 的红点 */
+    balconyMatureUnread: false,
     firstBootDone: false
   };
 }
@@ -18986,7 +19000,11 @@ function homeNormPlant(x) {
     water,
     growMs: isNewScale ? Math.max(0, Number(x.growMs) || 0) : 0,
     lastWateredTime: Math.max(0, Number(x.lastWateredTime) || 0),
-    lastUpdate: Number(x.lastUpdate) || Date.now()
+    lastUpdate: Number(x.lastUpdate) || Date.now(),
+    /* 种植者：ta=TA 偷偷种的；user=我种的。旧存档没有该字段，一律视为我种的 */
+    planter: x.planter === 'ta' ? 'ta' : 'user',
+    /* 是否已经发过「成熟通知」：每株只通知一次，旧存档默认未通知 */
+    isNotified: x.isNotified === true
   };
 }
 
@@ -19029,24 +19047,34 @@ function normalizeHome(src) {
   out.fridge = Array.isArray(s.fridge) ? s.fridge.filter(f => f && typeof f === 'object').map(f => {
     const name = String(f.name || '').trim().slice(0, 20);
     if (!name) return null;
-    const boughtAt = Number(f.boughtAt) || Date.now();
+    /* 时间字段双写：buyTime/expiryTime 为新字段，boughtAt/expireAt 保留兼容旧渲染与旧存档 */
+    const boughtAt = Number(f.boughtAt) || Number(f.buyTime) || Date.now();
+    const expireAt = Number(f.expireAt) || Number(f.expiryTime) || (boughtAt + 7 * 86400000);
+    /* 来源白名单：user=我买的 / ta=TA买的 / balcony=阳台种的；旧存档缺省按 user */
+    const by = (f.addedBy === 'ta' || f.addedBy === 'balcony') ? f.addedBy : 'user';
     return {
       id: String(f.id || uid()),
       name,
-      emoji: String(f.emoji || '🥡').slice(0, 4),
+      emoji: String(f.emoji || '🥡').trim().slice(0, 4),
+      /* 旧存档没有 count：默认 1 份 */
+      count: Math.max(1, Math.round(Number(f.count) || 1)),
       boughtAt,
-      expireAt: Number(f.expireAt) || (boughtAt + 7 * 86400000),
-      addedBy: f.addedBy === 'ta' ? 'ta' : 'user',
+      buyTime: boughtAt,
+      expireAt,
+      expiryTime: expireAt,
+      addedBy: by,
       /* 旧存档没有该字段：按食材库补判定，库外自定义食材视为需要烹饪 */
       isReadyToEat: typeof f.isReadyToEat === 'boolean'
         ? f.isReadyToEat
         : homeIngredientReady(name),
       /* 台词持久化：旧存档里 TA 买的食材没有台词时，按食材库补回来 */
-      dialogue: f.addedBy === 'ta'
+      dialogue: by === 'ta'
         ? String(f.dialogue || homeIngredientDialogue(name) || '').slice(0, 60)
         : ''
     };
   }).filter(Boolean) : [];
+  /* 旧存档里可能残留「同名 + 同 Emoji + 同来源」的重复卡片：读取时先洗一遍 */
+  out.fridge = homeMergeFridgeList(out.fridge).list;
   out.recipes = Array.isArray(s.recipes) ? s.recipes.filter(r => r && typeof r === 'object').map(r => {
     const name = String(r.name || '').trim().slice(0, 20);
     const ingredients = (Array.isArray(r.ingredients) ? r.ingredients : [])
@@ -19095,6 +19123,8 @@ function normalizeHome(src) {
     ? s.customSeeds.map(homeNormSeed).filter(Boolean).slice(0, 40)
     : [];
   out.lastBalconyTaWaterAt = Math.max(0, Number(s.lastBalconyTaWaterAt) || 0);
+  out.lastBalconyVisitAt = Math.max(0, Number(s.lastBalconyVisitAt) || 0);
+  out.balconyMatureUnread = s.balconyMatureUnread === true;
   return out;
 }
 
@@ -19245,21 +19275,91 @@ function homeIngredientReady(name, ready) {
   const hit = HOME_INGREDIENTS.find(i => i.name === name);
   return hit ? hit.ready === true : false;
 }
+/* ---------- 冰箱查重 / 自动洗数据 ---------- */
+/* 合并的唯一判定键：名称 + Emoji + 来源。
+ * 三者都先 trim 再拼复合键，保质期 / 时间戳绝不参与比对。 */
+function homeFridgeKey(name, emoji, addedBy) {
+  const nm = String(name == null ? '' : name).trim();
+  const em = String(emoji == null ? '' : emoji).trim();
+  const by = (addedBy === 'ta' || addedBy === 'balcony') ? addedBy : 'user';
+  return by + '\u0001' + nm + '\u0001' + em;
+}
+/* 纯函数：把一组食材里的重复项合并到「第一次出现」的那条上，数量相加。
+ * 只有名称 + Emoji + 来源完全一致才合并；不同来源 / 不同 Emoji 绝不误删。 */
+function homeMergeFridgeList(list) {
+  const src = Array.isArray(list) ? list : [];
+  const map = new Map();
+  const out = [];
+  src.forEach(raw => {
+    if (!raw || typeof raw !== 'object') return;
+    const name = String(raw.name == null ? '' : raw.name).trim().slice(0, 20);
+    if (!name) return;
+    const emoji = String(raw.emoji == null ? '' : raw.emoji).trim().slice(0, 4) || '🥡';
+    const addedBy = (raw.addedBy === 'ta' || raw.addedBy === 'balcony') ? raw.addedBy : 'user';
+    const count = Math.max(1, Math.round(Number(raw.count) || 1));
+    const key = homeFridgeKey(name, emoji, addedBy);
+    const hit = map.get(key);
+    if (hit) {
+      /* 命中重复项：加到第一条上，当前这条直接丢弃 */
+      hit.count = Math.max(1, Math.round(Number(hit.count) || 1)) + count;
+      return;
+    }
+    raw.name = name;
+    raw.emoji = emoji;
+    raw.addedBy = addedBy;
+    raw.count = count;
+    map.set(key, raw);
+    out.push(raw);
+  });
+  return { list: out, removed: src.length - out.length };
+}
+/* 读取 / 渲染冰箱时调用：清掉历史遗留的重复卡片，返回被合并掉的条数（0 表示没有脏数据） */
+function mergeFridgeData() {
+  if (!state || !state.home || !Array.isArray(state.home.fridge)) return 0;
+  const res = homeMergeFridgeList(state.home.fridge);
+  state.home.fridge = res.list;
+  return res.removed;
+}
+
 function homeAddFridgeItem(name, emoji, days, addedBy, ts, dialogue, ready) {
+  if (!state || !state.home) return null;
+  const nm = String(name == null ? '' : name).trim().slice(0, 20);
+  if (!nm) return null;
+  const em = String(emoji == null ? '' : emoji).trim().slice(0, 4) || '🥡';
+  const by = (addedBy === 'ta' || addedBy === 'balcony') ? addedBy : 'user';
   const now = Number(ts) || Date.now();
   const d = Math.max(1, Number(days) || 7);
-  const by = addedBy === 'ta' ? 'ta' : 'user';
-  state.home.fridge.push({
+  const expireAt = now + d * 86400000;
+  /* 严格查重：只认 名称 + Emoji + 来源（统一 trim 后比较，类型一致），
+   * 绝不把保质期 / 时间戳当作判定条件。名称相同但来源不同必须独立成条。 */
+  const key = homeFridgeKey(nm, em, by);
+  const same = state.home.fridge.find(f => f && homeFridgeKey(f.name, f.emoji, f.addedBy) === key);
+  if (same) {
+    /* 命中就累加数量，绝不再 push 一条新记录 */
+    same.count = Math.max(1, Math.round(Number(same.count) || 1)) + 1;
+    /* 新的一份更新鲜：到期时间取两者较晚的那个，别被旧记录拖累 */
+    same.buyTime = now;
+    same.boughtAt = now;
+    same.expireAt = Math.max(Number(same.expireAt) || 0, expireAt);
+    same.expiryTime = same.expireAt;
+    return same;
+  }
+  const item = {
     id: uid(),
-    name: String(name).slice(0, 20),
-    emoji: String(emoji || '🥡').slice(0, 4),
+    name: nm,
+    emoji: em,
+    count: 1,
     boughtAt: now,
-    expireAt: now + d * 86400000,
+    buyTime: now,
+    expireAt,
+    expiryTime: expireAt,
     addedBy: by,
-    isReadyToEat: homeIngredientReady(name, ready),
+    isReadyToEat: homeIngredientReady(nm, ready),
     /* 只有 TA 买的才带留言；没显式传入时自动按食材库补齐 */
-    dialogue: by === 'ta' ? String(dialogue || homeIngredientDialogue(name) || '').slice(0, 60) : ''
-  });
+    dialogue: by === 'ta' ? String(dialogue || homeIngredientDialogue(nm) || '').slice(0, 60) : ''
+  };
+  state.home.fridge.push(item);
+  return item;
 }
 /* TA 偷偷进货：打开【厨房】或【冰箱】时检查，间隔超过 12 小时才补 1~2 样食材 */
 function homeFridgeRestockIfDue() {
@@ -19354,12 +19454,14 @@ function homeRecipeCheck(recipe) {
   const need = homeRecipeNeed(recipe);
   const missing = [];
   Object.keys(need).forEach(name => {
-    const have = state.home.fridge.filter(f => f.name === name).length;
+    /* 按数量累加：同名不同来源的记录也要一起算进库存 */
+    const have = state.home.fridge.filter(f => f.name === name)
+      .reduce((sum, f) => sum + Math.max(0, Math.round(Number(f.count) || 1)), 0);
     if (have < need[name]) missing.push({ name, need: need[name], have });
   });
   return { ok: missing.length === 0, missing, need };
 }
-/* 消耗食材：同名食材优先用最快过期的那份 */
+/* 消耗食材：不区分来源，优先扣最快过期的那条记录，扣到 0 才移除，绝不出负数 */
 function homeConsumeForRecipe(recipe) {
   const need = homeRecipeNeed(recipe);
   Object.keys(need).forEach(name => {
@@ -19368,10 +19470,14 @@ function homeConsumeForRecipe(recipe) {
       let best = Infinity;
       state.home.fridge.forEach((f, i) => {
         if (f.name !== name) return;
-        const e = Number(f.expireAt) || Infinity;
+        if (Math.max(0, Math.round(Number(f.count) || 1)) <= 0) return;
+        const e = Number(f.expireAt) || Number(f.expiryTime) || Infinity;
         if (e < best) { best = e; idx = i; }
       });
-      if (idx >= 0) state.home.fridge.splice(idx, 1);
+      if (idx < 0) break;                 /* 库存不足：直接结束，保证不出现负数量 */
+      const rec = state.home.fridge[idx];
+      rec.count = Math.max(0, Math.round(Number(rec.count) || 1) - 1);
+      if (rec.count <= 0) state.home.fridge.splice(idx, 1);
     }
   });
 }
@@ -19573,6 +19679,8 @@ function homeOnBoot() {
   homeGrowPlants(now);
   homeTaPickFlowerIfAway(homeSession.prevMe, now);
   homeTaWaterBalconyIfDue(now);
+  /* 作物成熟监听：首查一次 + 每分钟轮询 + 切回前台补查 */
+  homeStartMatureWatch();
   /* 首次进入：TA 已经先买好一批食材放进冰箱 */
   if (!h.firstBootDone) {
     h.firstBootDone = true;
@@ -19619,6 +19727,8 @@ function homeTick() {
 
 /* ---------- 【家园】主页面 ---------- */
 function renderReadTogetherPage() {
+  /* 每次进入家园：结算 TA 偷偷种植物 / 摘走自己种成熟的植物 */
+  homeTaBalconyOnEnter(Date.now());
   const h = state.home;
   const roleName = esc(taName(homeRoleId()));
   const outfit = h.todayOutfit || {};
@@ -19666,6 +19776,7 @@ function renderReadTogetherPage() {
           <span class="hm-room-ic">${r.icon}</span>
           <span class="hm-room-nm">${r.name}</span>
           <span class="hm-room-ds">${r.desc}</span>
+          ${r.key === 'balcony' && homeBalconyUnread() ? '<span class="hm-room-dot"></span>' : ''}
         </button>`).join('')}
     </div>
     <div class="hm-foot">同居生活的每一件小事，都在慢慢变成习惯。</div>
@@ -19802,6 +19913,121 @@ function homeGrowPlants(now) {
   });
   return changed;
 }
+
+/* ---------- 作物成熟通知（系统通知 + 网页 Toast + 红点） ---------- */
+/* 阳台是否存在已成熟的作物（红点的数据依据） */
+function homeBalconyHasMature() {
+  return ((state && state.home && state.home.balconySlots) || []).some(p => p && Number(p.stage) >= 2);
+}
+/* 红点是否该亮：有成熟作物 且 还没进阳台看过 */
+function homeBalconyUnread() {
+  if (!state || !state.home) return false;
+  return state.home.balconyMatureUnread === true && homeBalconyHasMature();
+}
+/* 单株成熟通知：文案按种植者区分，系统通知带植物 id 作为 tag，天然去重 */
+function homeNotifyPlantMature(p) {
+  const mine = p.planter !== 'ta';
+  const title = mine ? '阳台丰收啦 🌱' : 'TA种的植物熟了 🥰';
+  const body = mine
+    ? `你种的【${p.emoji}${p.name}】已经成熟，快去阳台采摘吧！`
+    : `TA在阳台偷偷种的【${p.emoji}${p.name}】长大了，快去看看吧！`;
+  try {
+    notifyDefaultEvent(title, body, 'balcony-plant-' + p.id, { page: 'sub', name: 'homebalcony' });
+  } catch (e) { /* 系统通知失败不影响网页内提示 */ }
+  showToast(title + ' ' + body);
+}
+/* 同步三处红点：桌面【家园】图标 / 家园页【阳台】卡片 / 底部【桌面】Tab。
+ * 直接改 DOM，不重渲染整页，避免闪烁。 */
+function homeSyncBalconyDot() {
+  const unread = homeBalconyUnread();
+  /* 底部 Tab（静态节点，可能不存在） */
+  const tabDot = document.getElementById('tabHomeDot');
+  if (tabDot) tabDot.classList.toggle('hidden', !unread);
+  /* 桌面【家园】应用图标 */
+  const appBtn = document.querySelector('.home-app[data-happ="readtogether"]');
+  if (appBtn) {
+    let dot = appBtn.querySelector('.app-dot');
+    if (unread && !dot) {
+      dot = document.createElement('span');
+      dot.className = 'app-dot';
+      appBtn.appendChild(dot);
+    } else if (!unread && dot) {
+      dot.remove();
+    }
+  }
+  /* 家园页的【阳台】卡片 */
+  const roomBtn = document.querySelector('.hm-room[data-hm-room="balcony"]');
+  if (roomBtn) {
+    let dot = roomBtn.querySelector('.hm-room-dot');
+    if (unread && !dot) {
+      dot = document.createElement('span');
+      dot.className = 'hm-room-dot';
+      roomBtn.appendChild(dot);
+    } else if (!unread && dot) {
+      dot.remove();
+    }
+  }
+}
+/* 检查所有花盆：先把离线期间该长的长完，再给「刚成熟且没通知过」的植物发通知。
+ * isNotified 守卫保证同一株植物只通知一次；无变化时不写盘、不重渲染。 */
+function homeCheckPlantMaturity(now) {
+  if (!state || !state.home) return 0;
+  const h = state.home;
+  const t = Number(now) || Date.now();
+  try { homeGrowPlants(t); } catch (e) { /* 生长结算异常不阻塞通知检查 */ }
+  let count = 0;
+  (h.balconySlots || []).forEach(p => {
+    if (!p || Number(p.stage) < 2 || p.isNotified) return;
+    p.isNotified = true;
+    count++;
+    homeNotifyPlantMature(p);
+  });
+  if (count) {
+    /* 正停留在阳台页：作物就在眼前，不必再亮红点 */
+    const onBalcony = currentRoute && currentRoute.page === 'sub' && currentRoute.name === 'homebalcony';
+    if (!onBalcony) h.balconyMatureUnread = true;
+    persist(true);
+    homeSyncBalconyDot();
+    homeRefreshIfOpen(['homebalcony', 'readtogether']);
+  }
+  return count;
+}
+/* 进入阳台即视为「已查看」：清红点，并把已成熟作物标记为已通知，避免随后又被通知一次 */
+function homeClearBalconyUnread() {
+  if (!state || !state.home) return;
+  const h = state.home;
+  let changed = false;
+  (h.balconySlots || []).forEach(p => {
+    if (p && Number(p.stage) >= 2 && !p.isNotified) { p.isNotified = true; changed = true; }
+  });
+  if (h.balconyMatureUnread !== false) { h.balconyMatureUnread = false; changed = true; }
+  if (changed) persist(true);
+  homeSyncBalconyDot();
+}
+/* 成熟监听的启动：1 分钟轮询 + 切回前台立即检查。
+ * 用 watching 标记保证只绑定一次；每次检查都有 try-catch 与重入保护，不会卡死。 */
+let homeMatureTimer = 0;
+let homeMatureWatching = false;
+let homeMatureChecking = false;
+function homeStartMatureWatch() {
+  if (homeMatureWatching) return;
+  homeMatureWatching = true;
+  homeMatureTimer = setInterval(() => {
+    if (homeMatureChecking) return;          /* 上一次还没跑完：直接跳过，避免堆积 */
+    homeMatureChecking = true;
+    try { homeCheckPlantMaturity(Date.now()); }
+    catch (e) { console.warn('[home] 作物成熟检查失败，已跳过：', e); }
+    finally { homeMatureChecking = false; }
+  }, HOME_MATURE_CHECK_MS);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;             /* 切到后台不检查，回来时补 */
+    try { homeCheckPlantMaturity(Date.now()); }
+    catch (e) { /* 单次异常不影响后续轮询 */ }
+  });
+  /* 页面加载完成后先查一次：有「已成熟但没通知」的作物立即提醒 */
+  try { homeCheckPlantMaturity(Date.now()); } catch (e) { /* 忽略首查异常 */ }
+}
+
 /* 进入家园时，TA 有 30% 概率帮你浇水：随机 1~2 个花盆 +30% 水分（3 小时冷却） */
 function homeTaWaterBalconyIfDue(now) {
   const h = state.home;
@@ -19869,6 +20095,81 @@ function homeTaPickFlowerIfAway(prevVisit, now) {
   homeRefreshIfOpen(['homebalcony', 'readtogether']);
   return true;
 }
+/* ---------------- TA 偷偷种植物 ----------------
+ * 触发：进入【家园】或【阳台】时，距上次进入超过 6 小时。
+ * 条件：还有空花盆 + 40% 概率。种子从内置库与自定义种子库里随机抽。
+ * 铁律：只种进真正的空花盆（slots[i] 为空），绝不覆盖我正在种的植物。 */
+function homeTaPlantIfDue(prevVisit, now) {
+  const h = state.home;
+  const t = Number(now) || Date.now();
+  const prev = Number(prevVisit) || 0;
+  if (!prev || t - prev < HOME_TA_PLANT_GAP_MS) return false;   /* 首次访问 / 间隔不足：不触发 */
+  const slots = h.balconySlots || [];
+  const empty = [];
+  for (let i = 0; i < h.potCount; i++) { if (!slots[i]) empty.push(i); }
+  if (!empty.length) return false;                              /* 没有空花盆：什么也不做 */
+  if (Math.random() >= HOME_TA_PLANT_CHANCE) return false;       /* 40% 概率 */
+  const seed = homeRandPick(homeAllSeeds());
+  if (!seed) return false;
+  const idx = homeRandPick(empty);
+  /* silent：种植过程不弹「种下了…」，改由生活痕迹 + 顶部提示统一表达 */
+  const plant = homePlantSeed(idx, seed, 'ta', true);
+  if (!plant) return false;
+  const text = plant.type === 'flower'
+    ? `TA逛花鸟市场时带了【${plant.emoji}${plant.name}】的种子回来，偷偷种在了阳台的空花盆里`
+    : `趁你不注意，TA在阳台种下了【${plant.emoji}${plant.name}】`;
+  homePushTrace('balcony', text, t, 'ta');
+  showToast(text);
+  return true;
+}
+
+/* ---------------- TA 摘走自己种成熟的植物 ----------------
+ * TA 亲手种的（planter==='ta'）成熟后，TA 先摘走的概率提高到 80%：
+ * 花卉 → 礼物卡片发到主聊天；果蔬 → 正常放进冰箱。 */
+function homeTaHarvestOwnIfDue(now) {
+  const h = state.home;
+  const t = Number(now) || Date.now();
+  const idx = (h.balconySlots || []).findIndex(p => p && p.planter === 'ta' && p.stage >= 2);
+  if (idx < 0) return false;
+  if (Math.random() >= HOME_TA_OWN_PICK_CHANCE) return false;
+  const plant = h.balconySlots[idx];
+  h.balconySlots[idx] = null;
+  if (plant.type === 'flower') {
+    let line = '';
+    try {
+      line = String(composeCardText(homeRoleId(), { key: 'home-flower:' + plant.id, mergeMin: 1, mergeMax: 1 }) || '').trim();
+    } catch (e) { line = ''; }
+    if (!line) line = homeRandPick(HOME_FLOWER_LOVE_LINES);
+    homeTaSendFlowerGift(plant, line);         /* 内部会发礼物卡片到主聊天 */
+    homePushTrace('balcony', `TA把自己种开的${plant.emoji}${plant.name}摘下来，插在了你桌上的花瓶里`, t, 'ta');
+  } else {
+    /* TA 摘自己种在阳台的果蔬：同样记为阳台来源，3 天保质期 */
+    homeAddFridgeItem(plant.name, plant.emoji, 3, 'balcony', t);
+    homePushTrace('balcony', `TA把阳台上自己种的${plant.emoji}${plant.name}摘下来，放进了冰箱`, t, 'ta');
+  }
+  persist(true);
+  return true;
+}
+
+/* 进入【家园】/【阳台】的统一入口：先刷新访问时间，再结算 TA 的种植与采摘。
+ * 每一步都用 try-catch 兜住，阳台逻辑异常绝不影响页面渲染。 */
+function homeTaBalconyOnEnter(now) {
+  if (!state || !state.home) return false;
+  const h = state.home;
+  const t = Number(now) || Date.now();
+  const prev = Number(h.lastBalconyVisitAt) || 0;
+  h.lastBalconyVisitAt = t;      /* 本次访问时间，供下次计算间隔 */
+  let changed = false;
+  /* 先把离线期间的生长补结算，避免「其实已经成熟」却判成未成熟 */
+  try { if (homeGrowPlants(t)) changed = true; } catch (e) { /* 生长结算异常不影响后续 */ }
+  try { if (homeTaPlantIfDue(prev, t)) changed = true; }
+  catch (e) { console.warn('[home] TA 偷偷种植失败，已跳过：', e); }
+  try { if (homeTaHarvestOwnIfDue(t)) changed = true; }
+  catch (e) { console.warn('[home] TA 采摘自己种的植物失败，已跳过：', e); }
+  if (changed) persist();
+  return changed;
+}
+
 /* 我把花送给 TA：先生成送出卡片；TA 稍后收下并回一句 */
 function homeSendFlowerGift(plant) {
   const roleId = homeRoleId();
@@ -19905,11 +20206,14 @@ function homeSendFlowerGift(plant) {
   }, randInt(1600, 3200));
   return true;
 }
-function homePlantSeed(slotIdx, seed) {
+/* 种下一颗种子：planter 记录这是谁种的（user=我 / ta=TA 偷偷种的）。
+ * 只在真正的空花盆里种，已有植物直接放弃，绝不覆盖。返回新植物对象，失败返回 null。 */
+function homePlantSeed(slotIdx, seed, planter, silent) {
   const idx = Number(slotIdx);
-  if (!(idx >= 0 && idx < state.home.potCount) || !seed) return;
-  if (state.home.balconySlots[idx]) return;
-  state.home.balconySlots[idx] = {
+  if (!(idx >= 0 && idx < state.home.potCount) || !seed) return null;
+  if (state.home.balconySlots[idx]) return null;
+  const who = planter === 'ta' ? 'ta' : 'user';
+  const plant = {
     id: uid(),
     name: String(seed.name).slice(0, 12),
     emoji: String(seed.emoji || '🌱').slice(0, 4),
@@ -19918,11 +20222,18 @@ function homePlantSeed(slotIdx, seed) {
     water: 30,        /* 新种下先给 30% 水分，够撑到第一次浇水 */
     growMs: 0,
     lastWateredTime: 0,
-    lastUpdate: Date.now()
+    lastUpdate: Date.now(),
+    planter: who,
+    isNotified: false
   };
+  state.home.balconySlots[idx] = plant;
   persist(true);
-  showToast(`种下了${seed.emoji}${seed.name}`);
-  homeRefreshIfOpen(['homebalcony', 'readtogether']);
+  /* silent：TA 自己种的时候由调用方补充生活痕迹，不再弹「种下了…」也不触发重渲染（避免渲染中递归） */
+  if (!silent) {
+    showToast(`种下了${seed.emoji}${seed.name}`);
+    homeRefreshIfOpen(['homebalcony', 'readtogether']);
+  }
+  return plant;
 }
 /* 扩建一个花盆：上限 9 个 */
 function homeExpandPot() {
@@ -20066,7 +20377,8 @@ async function homeHarvestPlant(idx) {
     return;
   }
   h.balconySlots[i] = null;
-  homeAddFridgeItem(p.name, p.emoji, 7, 'user');
+  /* 阳台采摘入库：来源 balcony、数量 1、3 天保质期（时间字段由 homeAddFridgeItem 统一写入） */
+  homeAddFridgeItem(p.name, p.emoji, 3, 'balcony');
   homePushTrace('balcony', `你从阳台摘下了${p.emoji}${p.name}，放进了冰箱`, Date.now(), 'user');
   persist(true);
   showToast(`收获了【${p.emoji}${p.name}】，已自动放进冰箱！`);
@@ -20148,6 +20460,10 @@ function homeOpenCustomSeedForm(slotIdx) {
 function renderBalconyPage() {
   const h = state.home;
   homeGrowPlants(Date.now());
+  /* 每次进入阳台：结算 TA 偷偷种植物 / 摘走自己种成熟的植物（在渲染前完成，卡片直接反映结果） */
+  homeTaBalconyOnEnter(Date.now());
+  /* 已经进来查看了：清掉成熟红点，并把这些作物标记为已通知，避免重复弹窗 */
+  homeClearBalconyUnread();
   const roleName = esc(taName(homeRoleId()));
   const slots = h.balconySlots || [];
   const cards = slots.map((p, i) => {
@@ -20422,7 +20738,11 @@ async function homeFridgeEat(item) {
   const h = state.home;
   const idx = h.fridge.findIndex(f => f.id === item.id);
   if (idx < 0) return;                 /* 确认期间可能已被清理或删除 */
-  const eaten = h.fridge.splice(idx, 1)[0];
+  const rec = h.fridge[idx];
+  /* 只扣当前这一条记录的 count；归零才移除，不影响其它来源的同名食材 */
+  rec.count = Math.max(0, Math.round(Number(rec.count) || 1) - 1);
+  const eaten = { name: rec.name, emoji: rec.emoji, addedBy: rec.addedBy, dialogue: rec.dialogue };
+  if (rec.count <= 0) h.fridge.splice(idx, 1);
   homePushTrace('kitchen', `你从冰箱里拿出了${eaten.emoji}${eaten.name}吃掉了。`, Date.now(), 'user');
   persist(true);
   showToast(`你吃掉了${eaten.emoji}${eaten.name}`);
@@ -20434,6 +20754,9 @@ async function homeFridgeEat(item) {
 }
 
 function renderHomeFridgePage() {
+  /* 进页面先洗一遍历史脏数据：同名 + 同 Emoji + 同来源的重复卡片合并成 xN，有变化立即落盘 */
+  const merged = mergeFridgeData();
+  if (merged) persist(true);
   const removed = homeCleanFridge();
   if (removed) persist(true);
   /* TA 偷偷进货：超过 12 小时没检查过，就补 1~2 样食材（内部会自己弹提示） */
@@ -20441,21 +20764,29 @@ function renderHomeFridgePage() {
   if (removed && !restocked) showToast(`自动清理了 ${removed} 份过期食材`);
   const h = state.home;
   const list = h.fridge.slice().sort((a, b) => (Number(a.expireAt) || 0) - (Number(b.expireAt) || 0));
+  const totalCount = list.reduce((s, f) => s + Math.max(1, Math.round(Number(f.count) || 1)), 0);
+  /* 来源标签：我买的 / TA买的 / 阳台种的 */
+  const srcOf = f => f.addedBy === 'balcony'
+    ? { cls: 'balcony', txt: '阳台种的' }
+    : f.addedBy === 'ta' ? { cls: 'ta', txt: 'TA买的' } : { cls: 'me', txt: '我买的' };
   const body = subShell('冰箱', `
     <div class="hk-fridge-top">
-      <div class="t">${list.length} 份食材</div>
+      <div class="t">${totalCount} 份食材</div>
       <button class="hm-mini-btn" data-fridge-add>+ 添加食材</button>
     </div>
     ${list.length ? `<div class="hk-ing-grid">
       ${list.map(f => {
         const left = homeFridgeDaysLeft(f);
         const expTxt = left < 0 ? '已过期' : left === 0 ? '今天到期' : '剩 ' + left + ' 天';
+        const src = srcOf(f);
+        const cnt = Math.max(1, Math.round(Number(f.count) || 1));
         return `<div class="hk-ing" data-fridge-ing="${f.id}" role="button" tabindex="0">
           ${f.addedBy === 'ta' && f.dialogue ? '<span class="hk-ing-talk">💬</span>' : ''}
+          <span class="hk-count">x${cnt}</span>
           <div class="e">${esc(f.emoji)}</div>
           <div class="n">${esc(f.name)}</div>
           <div class="exp ${left <= 1 ? 'soon' : ''}">${expTxt}</div>
-          <span class="hk-src ${f.addedBy === 'ta' ? 'ta' : 'me'}">${f.addedBy === 'ta' ? 'TA买的' : '我买的'}</span>
+          <span class="hk-src ${src.cls}">${src.txt}</span>
           <button class="hk-ing-del" data-fridge-del="${f.id}" aria-label="删除食材">✕</button>
         </div>`;
       }).join('')}
@@ -20464,7 +20795,7 @@ function renderHomeFridgePage() {
       <div class="t">冰箱空空如也</div>
       <div class="d">TA 偶尔会买食材回来，你也可以自己添一些。</div>
     </div>`}
-    <div class="hm-note">每次打开冰箱都会自动清理过期食材；标签会标明是「TA买的」还是「我买的」。长按即食食材可以直接吃掉。</div>
+    <div class="hm-note">每次打开冰箱都会自动清理过期食材；标签会标明是「我买的」「TA买的」还是「阳台种的」。长按即食食材可以直接吃掉。</div>
   `);
   const addBtn = $('[data-fridge-add]', body);
   if (addBtn) addBtn.addEventListener('click', homeOpenAddIngredient);
@@ -23127,7 +23458,7 @@ const emotionCategories = {
   },
   focus: {
     name: "专注日常", color: "#3CB371", bg: "rgba(60, 179, 113, 0.15)",
-    words: ["极度认真", "在忙勿扰", "专心致志", "发呆中", "偷得浮生", "听歌中", "懒洋洋", "想睡觉", "无聊中", "精神内耗"]
+    words: ["极度认真", "在忙勿扰", "专心致志", "发呆中", "偷得浮生", "听歌中", "懒洋洋", "放空发呆", "无聊中", "精神内耗"]
   },
   dark: {
     name: "腹黑暧昧", color: "#8A2BE2", bg: "rgba(138, 43, 226, 0.15)",
