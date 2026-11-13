@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v9.1.3';
+const APP_VERSION = 'v9.1.4';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -2280,6 +2280,9 @@ function applyRoute() {
   /* tabbar 在聊天时也隐藏（它在 #app 里，z-index 低于聊天页，但视觉上应该整个应用就只剩聊天页） */
   const tabbar = document.getElementById('tabbar');
   if (tabbar) tabbar.style.display = isChat ? 'none' : '';
+  /* 安卓旧内核不支持 :has() 选择器：桌面页隐藏 Tab 靠这个类兜底（CSS 里两套写法并存） */
+  const appEl = document.getElementById('app');
+  if (appEl) appEl.classList.toggle('hide-tabbar', page === 'home');
   /* 打开聊天页锁死 body 底层滚动，关闭聊天页恢复（配合 body.chat-open CSS，切断底层页面跟随滚动的可能） */
   document.body.classList.toggle('chat-open', isChat);
 
@@ -3307,6 +3310,15 @@ function renderChatPage(roleId) {
     ta.style.height = 'auto';
     ta.style.height = Math.min(88, ta.scrollHeight) + 'px';
   });
+  /* 键盘收起（输入框失焦）后安全贴底：只在用户本来就在底部时补滚一次。
+     绝不在 window.resize / visualViewport.resize 里改 scrollTop —— 那是页面乱跳的根源。 */
+  ta.addEventListener('blur', () => {
+    if (!chatUserPinnedBottom) return;
+    setTimeout(() => {
+      if (currentRoute.page !== 'chat' || currentRoute.roleId !== roleId) return;
+      chatScrollToBottom(true);
+    }, 80);
+  });
   ta.addEventListener('keydown', e => {
     if (e.key !== 'Enter' || e.shiftKey) return;
     /* 中文输入法选词中按 Enter 只是选词，绝不能触发发送 */
@@ -3330,6 +3342,21 @@ function renderChatPage(roleId) {
   if (hint0) hint0.classList.toggle('show', !!typingMap.get(roleId) && !chatSelectMode);
 
   applyBeautify();
+  /* 滚动钉底状态：进入聊天页默认「停在最新消息」，并监听用户是否上滑翻历史。
+     #chatScroll 在页面内只重建一次，这里绑定一次即可（不进 renderChatMessages，避免重复绑定） */
+  chatUserPinnedBottom = true;
+  chatLastScrollTop = 0;
+  const scEl = $('#chatScroll');
+  if (scEl) {
+    /* 只有「向上滚动」才可能取消钉底；内容变高（scrollTop 不变或变大）不算用户上滑，
+       否则图片/占位气泡撑高列表时会被误判成用户翻历史，后续重试全部失效 → 停在最新消息上方 */
+    scEl.addEventListener('scroll', () => {
+      const st = scEl.scrollTop;
+      if (st < chatLastScrollTop - 2) chatUserPinnedBottom = chatIsNearBottom(scEl);
+      else if (chatIsNearBottom(scEl)) chatUserPinnedBottom = true;
+      chatLastScrollTop = st;
+    }, { passive: true });
+  }
   /* 先让页面结构（导航 / 消息区 / 输入框）切过去，再在下一帧渲染消息：
      避免「一次性建 DOM」和页面切换抢同一帧，导致点进来先卡住、后显示 */
   requestAnimationFrame(() => {
@@ -3586,6 +3613,48 @@ function normalizeChatIds(roleId) {
     seen.add(id);
   }
   if (changed) persist();
+}
+
+/* ===== 聊天滚动「钉底」控制 =====
+ * 目的：发消息 / 收到消息后稳定停在最新一条，绝不往上跳。
+ * 规则：
+ *  1) 只操作 #chatScroll 容器的 scrollTop，不对任何消息节点调用 scrollIntoView；
+ *  2) 图片 / 表情 / 卡片高度晚撑开，单次赋值不可靠 → 用 rAF + 多次延迟重试补一次；
+ *  3) 用户在往上翻历史时（chatUserPinnedBottom=false）不强行拽回底部，改按高度差补偿。 */
+let chatUserPinnedBottom = true;   /* 用户当前是否停在列表底部（进入聊天页默认 true） */
+let chatBottomTimers = [];         /* 钉底重试计时器句柄，重排前先清空避免堆积 */
+let chatLastScrollTop = 0;         /* 上一次 scrollTop：用于区分「用户上滑」与「内容变高」 */
+
+/* 距离底部 60px 以内都算「贴着底部」，避免像素级误差把用户误判成已上滑 */
+function chatIsNearBottom(sc, tolerance) {
+  if (!sc) return true;
+  const tol = Number.isFinite(tolerance) ? tolerance : 60;
+  return sc.scrollHeight - sc.scrollTop - sc.clientHeight <= tol;
+}
+
+/* 立即滚到最底部（唯一写 scrollTop 的入口） */
+function chatScrollToBottom(force) {
+  if (!currentRoute || currentRoute.page !== 'chat') return;
+  if (chatWinStart !== null) return;        /* 搜索跳转的局部窗口：绝不贴底 */
+  const sc = $('#chatScroll');
+  if (!sc) return;
+  if (!force && !chatUserPinnedBottom) return;
+  sc.scrollTop = sc.scrollHeight;
+  chatLastScrollTop = sc.scrollTop;
+}
+
+/* 多次重试钉底：rAF 先对齐一帧，再用 50/150/300/600ms 兜住图片、字体、卡片晚撑开的高度。
+ * force=true 只在「刚发出消息 / 刚进入页面」时使用：它把钉底标记置 true；
+ * 后续每次重试仍会尊重实时标记，用户一旦上滑翻历史，剩余重试自动失效，不会被拽回底部。 */
+function chatPinBottom(force, delays) {
+  chatBottomTimers.forEach(t => clearTimeout(t));
+  chatBottomTimers = [];
+  if (force) chatUserPinnedBottom = true;
+  requestAnimationFrame(() => chatScrollToBottom(false));
+  const seq = Array.isArray(delays) ? delays : [50, 150, 300, 600];
+  seq.forEach(d => {
+    chatBottomTimers.push(setTimeout(() => chatScrollToBottom(false), d));
+  });
 }
 
 function loadOlderMessages() {
@@ -3975,6 +4044,12 @@ function renderChatMessages(keepScroll) {
       </div>`;
   }
 
+  /* 重建 DOM 前先记住滚动状态：重建后 scrollTop 会归零，必须自己还原 */
+  const scBefore = $('#chatScroll');
+  const prevTop = scBefore ? scBefore.scrollTop : 0;
+  const prevHeight = scBefore ? scBefore.scrollHeight : 0;
+  const wasPinned = chatUserPinnedBottom;
+
   list.innerHTML = html;
   list.classList.toggle('selecting', chatSelectMode);
   /* 「正在输入…」小字：只挂在聊天页顶部名字下方，不再占用消息区 */
@@ -3992,14 +4067,14 @@ function renderChatMessages(keepScroll) {
   /* 窗口模式或 keepScroll（搜索跳转的局部渲染 / 加载更多）一律不强制贴底：
      贴底会把刚跳到的旧消息又甩回最新消息处 */
   if (sc && !keepScroll && !winMode) {
-    sc.scrollTop = sc.scrollHeight;
-    /* 图片 / 字体晚加载会撑高消息区：原本贴着底部时补一次贴底，
-       避免进入聊天页停在「最新消息上方」；用户已上滑时不动 */
-    setTimeout(() => {
-      if (currentRoute.page !== 'chat' || currentRoute.roleId !== roleId) return;
-      if (chatWinStart !== null) return;
-      if (sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 120) sc.scrollTop = sc.scrollHeight;
-    }, 80);
+    if (wasPinned) {
+      /* 贴底状态：只动滚动条，并做多次重试，保证图片/表情加载后仍停在最新消息 */
+      chatPinBottom(true);
+    } else {
+      /* 用户正在翻历史：按新增高度补偿，视线停在原处，绝不拽回底部 */
+      sc.scrollTop = Math.max(0, prevTop + (sc.scrollHeight - prevHeight));
+      chatLastScrollTop = sc.scrollTop;
+    }
   }
 }
 
@@ -4923,8 +4998,9 @@ function appendChatMessageNode(roleId, msg) {
   });
   /* 新的我方消息出现后，旧的「已读」标记不再指向最后一条 */
   $$('.read-mark', list).forEach(el => el.remove());
-  const sc = $('#chatScroll');
-  if (sc) sc.scrollTop = sc.scrollHeight;
+  /* 刚发出消息：用户意图必然是看最新消息 → 重置钉底状态并强制滚到底部（含多次重试） */
+  chatUserPinnedBottom = true;
+  chatPinBottom(true);
   return true;
 }
 
@@ -8567,7 +8643,12 @@ function applyBeautify() {
   if (!state || !state.beautify) return;
   const b = state.beautify;
   const app = document.getElementById('app');
-  if (app) app.className = 'icon-theme-' + (['blue', 'light', 'dark'].includes(b.iconTheme) ? b.iconTheme : 'blue');
+  /* 安卓兼容：这里绝不能整体覆盖 className —— 那会连带清掉 hide-tabbar（桌面隐藏 Tab 的兜底类）、
+     glass-on 等其它逻辑类。改为只增删主题类。 */
+  if (app) {
+    app.classList.remove('icon-theme-blue', 'icon-theme-light', 'icon-theme-dark');
+    app.classList.add('icon-theme-' + (['blue', 'light', 'dark'].includes(b.iconTheme) ? b.iconTheme : 'blue'));
+  }
   /* 组件外观：磨砂玻璃开关 + 透明度，统一走 CSS 变量（实时生效，无需重绘页面） */
   if (app) {
     app.classList.toggle('glass-on', b.glassOn === true);

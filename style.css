@@ -20,10 +20,14 @@
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
 html,body{
-  margin:0;padding:0;width:100%;height:100%;
+  margin:0;padding:0;width:100%;max-width:100%;min-width:0;height:100%;
   overflow:hidden;position:fixed;top:0;left:0;right:0;bottom:0;
   overscroll-behavior:none;
   -webkit-overflow-scrolling:auto;
+  /* 安卓兼容：禁止系统「字体缩放 / 文字自动放大」把布局撑破（部分 ROM 默认开启） */
+  -webkit-text-size-adjust:100%;
+  -moz-text-size-adjust:100%;
+  text-size-adjust:100%;
 }
 body{
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
@@ -39,6 +43,8 @@ img{display:block;}
 #app{
   position:relative;display:flex;flex-direction:column;
   width:100%;max-width:480px;
+  /* 安卓兼容：旧内核不认 dvh 时整条声明会被丢弃，必须先给 100vh 兜底，否则 #app 没有高度、整页塌成平铺 */
+  height:100vh;
   height:100dvh; /* 纯 CSS 动态视口高度，不再由 JS 计算 */
   margin:0 auto;background:var(--bg);overflow:hidden;
   /* 桌面组件外观（磨砂玻璃）统一由这两个变量控制，默认 80% / 16px */
@@ -48,11 +54,27 @@ img{display:block;}
 }
 @media (min-width:560px){
   body{padding:18px 0;background:radial-gradient(1100px 620px at 50% -10%,#dde6f2,#eef1f5 65%);}
-  #app{height:calc(100dvh - 36px);border-radius:26px;box-shadow:0 26px 70px rgba(20,40,80,.20);}
+  #app{height:calc(100vh - 36px);height:calc(100dvh - 36px);border-radius:26px;box-shadow:0 26px 70px rgba(20,40,80,.20);}
 }
 #viewport{flex:1;position:relative;overflow:hidden;}
-.page{position:absolute;inset:0;display:none;flex-direction:column;background:var(--bg);overflow:hidden;}
+.page{
+  position:absolute;
+  /* 安卓兼容：旧内核不支持 inset 简写时，四边为 auto 会让整页塌成平铺；先写长写兜底 */
+  top:0;right:0;bottom:0;left:0;inset:0;
+  display:none;flex-direction:column;background:var(--bg);overflow:hidden;
+}
 .page.active{display:flex;}
+
+/* ===================== 安卓旧内核兼容兜底 =====================
+ * 这里只写「属性不支持时仅该条被忽略」的安全写法，绝不用会让解析器整体出错的语法。
+ * 1) inset 简写：旧内核不支持时四边为 auto，整页会塌成平铺 → 全屏容器统一补长写；
+ * 2) :has() 选择器：旧内核整条规则失效 → 由 app.js 同步 .hide-tabbar 类兜底。 */
+.modal-overlay,#modalRoot,#callLayer,.call-screen,.sticker-loading,
+.lightbox,.theme-picker-mask,.pet-layer{
+  top:0;right:0;bottom:0;left:0;
+}
+/* JS 兜底类：桌面页隐藏底部 Tab（替代 :has() 选择器） */
+#app.hide-tabbar > #tabbar{display:none !important;}
 .scroll{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;}
 
 /* ===================== 底部三栏 Tab ===================== */
@@ -63,6 +85,9 @@ img{display:block;}
 #tabbar.hidden{display:none;}
 /* 桌面（首页）不显示底部 Tab 栏：它会以实心色块压住壁纸、把界面切断。
    进入消息 / 空间等页面时 Tab 栏照常出现，不影响原有导航。 */
+/* 桌面页隐藏底部 Tab：原写法依赖 :has()（安卓旧内核不支持会整条失效），这里用类选择器兜底。
+   app.js 切路由时会同步给 #app 加/去 .hide-tabbar，两套写法同时存在不冲突。 */
+#app.hide-tabbar > #tabbar,
 #app:has(> #viewport > #page-home.active) > #tabbar{display:none !important;}
 .tab{
   flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;
@@ -835,7 +860,7 @@ img.img-broken{display:none !important;}
 /* ===================== 空间：3 区块 flex 布局（朋友圈风） ===================== */
 #page-space.active{
   display:flex !important;flex-direction:column !important;
-  height:100dvh !important;height:100vh !important;
+  height:100vh !important;height:100dvh !important;
 }
 
 /* 1) 顶部导航栏：白底 + safe-area + 右侧「+」发布入口 */
@@ -949,7 +974,7 @@ img.img-broken{display:none !important;}
 /* ===== 发布动态页面（独立全屏页） ===== */
 #page-space-publish.active{
   display:flex !important;flex-direction:column !important;
-  height:100dvh !important;height:100vh !important;background:#fff;
+  height:100vh !important;height:100dvh !important;background:#fff;
 }
 .pub-header{
   position:relative;z-index:10;flex-shrink:0;
@@ -1160,8 +1185,9 @@ input[type=range]::-webkit-slider-thumb{
 /* ===================== 弹窗 / 提示 ===================== */
 #modalRoot{position:fixed;inset:0;z-index:10002;pointer-events:none;}
 .modal-overlay{
-  position:absolute;inset:0;background:rgba(16,24,40,.42);display:flex;align-items:center;
+  position:absolute;top:0;right:0;bottom:0;left:0;inset:0;background:rgba(16,24,40,.42);display:flex;align-items:center;
   justify-content:center;padding:22px;opacity:0;transition:opacity .18s;pointer-events:auto;
+  -webkit-backdrop-filter:blur(2px);
   backdrop-filter:blur(2px);
 }
 .modal-overlay.show{opacity:1;}
@@ -1670,7 +1696,7 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
 .gmk-result-actions .gmk-opt{flex:1;padding:8px 0;border:none;border-radius:10px;background:#F2F2F7;font-size:13px;color:#3C3C43;cursor:pointer;}
 .gmk-result-actions #gmkAgain{background:var(--primary);color:#fff;}
 /* ===== 赛博羽毛球 ===== */
-.bdm-wrap{display:flex;flex-direction:column;gap:8px;padding:2px 0 10px;box-sizing:border-box;min-height:calc(100dvh - 220px);}
+.bdm-wrap{display:flex;flex-direction:column;gap:8px;padding:2px 0 10px;box-sizing:border-box;min-height:calc(100vh - 220px);min-height:calc(100dvh - 220px);}
 .bdm-modes{display:flex;gap:8px;flex-shrink:0;}
 .bdm-mode{flex:1;padding:7px 0;border-radius:999px;border:1px solid #2a3648;background:rgba(12,20,32,.9);color:#9fb3cc;font-size:12.5px;font-weight:600;transition:border-color .18s ease,color .18s ease,background-color .18s ease,box-shadow .18s ease;}
 .bdm-mode.active{border-color:#2de2ff;color:#8ff4ff;background:rgba(45,226,255,.12);box-shadow:0 0 12px rgba(45,226,255,.25);}
@@ -2222,7 +2248,11 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
 .rd-shelf::before{
   content:'';position:absolute;left:0;right:0;top:0;bottom:6px;
   border-radius:12px;
-  background:rgba(var(--primary-rgb),.08);
+  background:rgba(var(--primary-rgb),.10);
+  /* 安卓兼容：color-mix() 在旧内核无效会被丢弃，这里先用 rgba 近似兜底，视觉几乎一致 */
+  background:linear-gradient(180deg,
+    rgba(var(--primary-rgb),.08),
+    rgba(var(--primary-rgb),.14));
   background:linear-gradient(180deg,
     color-mix(in srgb, var(--primary) 8%, #fff),
     color-mix(in srgb, var(--primary) 14%, #fff));
@@ -2232,12 +2262,16 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
   content:'';position:absolute;left:-2px;right:-2px;bottom:2px;height:10px;
   border-radius:3px;
   background:rgba(var(--primary-rgb),.20);
+  /* 安卓兼容：color-mix() 不支持时的 rgba 兜底 */
+  background:linear-gradient(180deg,
+    rgba(var(--primary-rgb),.24),
+    rgba(var(--primary-rgb),.14));
   background:linear-gradient(180deg,
     color-mix(in srgb, var(--primary) 24%, #fff),
     color-mix(in srgb, var(--primary) 14%, #fff));
-  box-shadow:0 5px 10px color-mix(in srgb, var(--primary) 26%, transparent),
+  box-shadow:0 5px 10px rgba(var(--primary-rgb),.26),
              inset 0 1px 0 rgba(255,255,255,.7),
-             inset 0 -1px 0 color-mix(in srgb, var(--primary) 22%, transparent);
+             inset 0 -1px 0 rgba(var(--primary-rgb),.22);
 }
 .rd-shelf-track{
   position:relative;z-index:1;
