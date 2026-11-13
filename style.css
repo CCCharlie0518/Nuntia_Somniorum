@@ -1502,6 +1502,23 @@ body{
 .chat-nav .sub{font-size:11px;color:#8E8E93;margin-top:1px;}
 .chat-scroll{background:#F2F2F7;padding:14px 14px 8px;}
 .chat-list{gap:10px;}
+/* 新消息入场：只用 opacity + transform（不碰 height / margin / display），
+   不触发重排，也不会让整屏闪一下；只挂在增量插入的那一条上，历史消息永不重播 */
+@keyframes chatMsgEnter{
+  from{opacity:0;transform:translateY(6px);}
+  to{opacity:1;transform:translateY(0);}
+}
+.msg.msg-enter{animation:chatMsgEnter .22s ease-out both;}
+@media (prefers-reduced-motion:reduce){
+  .msg.msg-enter{animation:none;}
+}
+/* 插入新消息 / 滚动期间临时关闭顶部导航与输入栏的毛玻璃：
+   backdrop-filter 在相邻区域重绘时会被反复重算，容易放大成整屏闪烁 */
+.chat-page.chat-no-glass .chat-nav,
+.chat-page.chat-no-glass .chat-input{
+  -webkit-backdrop-filter:none !important;
+  backdrop-filter:none !important;
+}
 .bubble{font-size:15.5px;line-height:1.42;padding:8px 13px;border-radius:18px;box-shadow:none;}
 .msg.theirs .bubble{background:#E9E9EB;color:#000;border-top-left-radius:18px;box-shadow:none;}
 .msg.mine .bubble{background:var(--primary);color:#fff;border-top-right-radius:18px;}

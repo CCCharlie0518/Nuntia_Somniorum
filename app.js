@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v9.1.4';
+const APP_VERSION = 'v9.1.5';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -3355,6 +3355,8 @@ function renderChatPage(roleId) {
       if (st < chatLastScrollTop - 2) chatUserPinnedBottom = chatIsNearBottom(scEl);
       else if (chatIsNearBottom(scEl)) chatUserPinnedBottom = true;
       chatLastScrollTop = st;
+      /* 滚动期间临时关掉毛玻璃层，避免相邻区域重绘时反复重算 blur 造成闪屏 */
+      chatSuspendGlass();
     }, { passive: true });
   }
   /* 先让页面结构（导航 / 消息区 / 输入框）切过去，再在下一帧渲染消息：
@@ -3789,7 +3791,9 @@ function renderChatIf(roleId) {
   if (currentRoute.page === 'chat' && currentRoute.roleId === roleId) renderChatMessages();
 }
 
-function renderChatMessages(keepScroll) {
+/* keepScroll：保留滚动位置（加载更多 / 搜索跳转）；
+   appendMsg：增量模式，只渲染这一条消息并追加到末尾，绝不清空重建已有节点 */
+function renderChatMessages(keepScroll, appendMsg) {
   const list = $('#chatList');
   if (!list) return;
   const roleId = currentRoute.roleId;
@@ -3807,9 +3811,18 @@ function renderChatMessages(keepScroll) {
     chatWinStart = null;
     chatWinSize = 0;
   }
-  const winMode = chatWinStart !== null;
+  /* appendMsg 走增量路径：winMode 只属于整表渲染，不能把「搜索跳转窗口」的切片逻辑带进来 */
+  const winMode = chatWinStart !== null && !appendMsg;
   let startIdx, endIdx, visible;
-  if (winMode) {
+  if (appendMsg) {
+    const idx = msgs.indexOf(appendMsg);
+    if (idx < 0) return;
+    /* 只渲染这一条；startIdx 指向前一条，下面 lastTs 的初值即「上一条消息时间」，
+       时间分隔的 5 分钟判定与整表渲染完全一致 */
+    startIdx = idx;
+    endIdx = idx + 1;
+    visible = msgs.slice(idx, idx + 1);
+  } else if (winMode) {
     /* 局部窗口模式：只取目标附近的 60 条（由 jumpToChatMessage 设置），绝不全量渲染 */
     startIdx = clamp(chatWinStart, 0, msgs.length);
     endIdx = clamp(startIdx + Math.max(1, chatWinSize), startIdx, msgs.length);
@@ -3827,7 +3840,7 @@ function renderChatMessages(keepScroll) {
     return -1;
   })();
 
-  if (startIdx > 0) {
+  if (startIdx > 0 && !appendMsg) {
     html += `<div class="chat-more"><button id="chatMoreBtn" type="button">查看更早的消息（还有 ${startIdx} 条）</button></div>`;
   }
 
@@ -4034,7 +4047,7 @@ function renderChatMessages(keepScroll) {
 
   /* 聊天框内的「气泡 + 省略号」占位动画：与顶部「正在输入…」小字同时存在，
      连发全程保持显示直到最后一条发出后移除；临时 UI，不写入聊天记录 */
-  if (typingMap.get(roleId) && !chatSelectMode) {
+  if (!appendMsg && typingMap.get(roleId) && !chatSelectMode) {
     html += `
       <div class="msg theirs typing-placeholder">
         <span class="ava-pat">${roleAvatarHTML(role, 34)}</span>
@@ -4042,6 +4055,31 @@ function renderChatMessages(keepScroll) {
           <div class="bubble typing-bubble"><i></i><i></i><i></i></div>
         </div>
       </div>`;
+  }
+
+  /* ===== 增量路径：只把新消息（可能带一条时间分隔）插到列表末尾 =====
+     不清空 innerHTML、不重建历史消息节点，图片/头像不会重新解码，因此不会闪屏 */
+  if (appendMsg) {
+    const empty = $('.chat-empty', list);
+    if (empty) empty.remove();
+    const holder = document.createElement('div');
+    holder.innerHTML = html;
+    const frag = document.createDocumentFragment();
+    while (holder.firstElementChild) {
+      const node = holder.firstElementChild;
+      /* 只有「这条新消息」播放入场上浮动画；历史节点永不重播 */
+      if (node.classList && node.classList.contains('msg')) {
+        node.classList.add('msg-enter');
+        node.addEventListener('animationend', () => node.classList.remove('msg-enter'), { once: true });
+      }
+      frag.appendChild(node);
+    }
+    const ph = $('.typing-placeholder', list);
+    if (ph && ph.parentNode === list) list.insertBefore(frag, ph); else list.appendChild(frag);
+    chatSuspendGlass();
+    /* 插入完成后的下一帧再贴底：避免与浏览器渲染同一帧抢排版导致闪动 */
+    if (chatUserPinnedBottom) requestAnimationFrame(() => chatPinBottom(false));
+    return;
   }
 
   /* 重建 DOM 前先记住滚动状态：重建后 scrollTop 会归零，必须自己还原 */
@@ -4076,6 +4114,110 @@ function renderChatMessages(keepScroll) {
       chatLastScrollTop = sc.scrollTop;
     }
   }
+}
+
+/* ===================== 聊天页增量更新（收到 / 撤回 / 正在输入） =====================
+   原则：只有切换会话、首次进入、清空记录才整表重绘；
+   收到新消息、TA 撤回、正在输入显隐都只动对应的那一个节点，避免整屏闪烁 */
+
+/* 插入新消息 / 滚动时临时关掉顶部导航与输入栏的毛玻璃：
+   backdrop-filter 会在相邻区域重绘时被反复重算，是「屏幕闪一下」的常见放大因素 */
+let chatGlassTimer = 0;
+function chatSuspendGlass() {
+  const page = $('#page-chat');
+  if (!page) return;
+  page.classList.add('chat-no-glass');
+  clearTimeout(chatGlassTimer);
+  chatGlassTimer = setTimeout(() => page.classList.remove('chat-no-glass'), 200);
+}
+
+/* 「正在输入…」增量显隐：只增删打字占位节点与顶部小字，不重绘消息列表 */
+function chatSyncTyping(roleId) {
+  if (currentRoute.page !== 'chat' || currentRoute.roleId !== roleId) return;
+  const list = $('#chatList');
+  if (!list) return;
+  const on = !!typingMap.get(roleId) && !chatSelectMode;
+  const hint = $('#chatTypingHint');
+  if (hint) hint.classList.toggle('show', on);
+  /* 搜索跳转的局部窗口：极少见，交回整表渲染，保证占位与窗口内容一致 */
+  if (chatWinStart !== null) { renderChatMessages(true); return; }
+  const ph = $('.typing-placeholder', list);
+  if (on && !ph) {
+    const role = roleById(roleId);
+    if (!role) return;
+    const empty = $('.chat-empty', list);
+    if (empty) empty.remove();
+    const holder = document.createElement('div');
+    holder.innerHTML = `
+      <div class="msg theirs typing-placeholder">
+        <span class="ava-pat">${roleAvatarHTML(role, 34)}</span>
+        <div class="msg-body">
+          <div class="bubble typing-bubble"><i></i><i></i><i></i></div>
+        </div>
+      </div>`;
+    const node = holder.firstElementChild;
+    if (node) list.appendChild(node);
+  } else if (!on && ph) {
+    ph.remove();
+  }
+}
+
+/* 「已读」小字增量更新：只给最后一条我方消息补标记，不整表重绘 */
+function chatMarkLastUserRead(roleId) {
+  if (currentRoute.page !== 'chat' || currentRoute.roleId !== roleId) return;
+  const list = $('#chatList');
+  if (!list) return;
+  const msgs = chatOf(roleId);
+  let last = null;
+  for (let k = msgs.length - 1; k >= 0; k--) {
+    if (msgs[k].role === 'user') { last = msgs[k]; break; }
+  }
+  if (!last || !last.read) return;
+  const mine = $$('.msg.mine', list);
+  const node = mine[mine.length - 1];
+  /* 只有节点确实对应「最后一条我方消息」时才补标记，避免标到旧消息上 */
+  if (!node || node.dataset.msgId !== String(last.id) || $('.read-mark', node)) return;
+  const timeEl = $('.msg-time', node);
+  if (!timeEl) return;
+  const mark = document.createElement('span');
+  mark.className = 'read-mark';
+  mark.textContent = '已读' + (last.readNote ? ' · ' + last.readNote : '');
+  timeEl.appendChild(mark);
+}
+
+/* 收到 / 发出单条消息：只追加这一条节点。返回 false 表示当前不适合增量（由调用方整表重绘） */
+function chatAppendMessageNode(roleId, msg) {
+  if (currentRoute.page !== 'chat' || currentRoute.roleId !== roleId) return false;
+  if (!roleById(roleId)) return false;
+  /* 列表还没为本会话整表渲染过：交给整表渲染，避免错位插入 */
+  if (chatRenderRole !== roleId) return false;
+  if (chatSelectMode) return false;
+  /* 局部窗口模式下列表末尾不是最新消息：退回末尾分页并整表重绘一次 */
+  if (chatWinStart !== null) { chatWinStart = null; chatWinSize = 0; return false; }
+  if (chatOf(roleId).indexOf(msg) < 0) return false;
+  renderChatMessages(false, msg);
+  return true;
+}
+
+/* TA 撤回：只替换这一条气泡的内容，其余消息节点完全不重绘 */
+function chatApplyRecall(roleId, msg) {
+  if (currentRoute.page !== 'chat' || currentRoute.roleId !== roleId) return false;
+  const list = $('#chatList');
+  if (!list) return false;
+  const node = list.querySelector('.msg[data-msg-id="' + cssAttrValue(msg.id) + '"]');
+  if (!node) return false;
+  const body = $('.msg-body', node);
+  if (!body) return false;
+  /* 保留时间行，其余内容整体换成灰色撤回提示（与整表渲染的文案一致） */
+  Array.from(body.children).forEach(ch => { if (!ch.classList.contains('msg-time')) ch.remove(); });
+  const role = roleById(roleId);
+  const dn = String((role && role.name) || '').trim() || 'TA';
+  const mine = msg.sender ? msg.sender === 'user' : msg.role === 'user';
+  const tip = document.createElement('div');
+  tip.className = 'recall-tip';
+  tip.textContent = `${mine ? '你' : dn}撤回了一条消息`;
+  body.insertBefore(tip, body.firstChild);
+  return true;
 }
 
 /* ===================== 聊天页「搜索聊天记录」 =====================
@@ -4443,7 +4585,7 @@ function openMessageActions(roleId, msgId) {
         msg.recalled = true;
         msg.recalledAt = Date.now();
         persist();
-        renderChatIf(roleId);
+        if (!chatApplyRecall(roleId, msg)) renderChatIf(roleId);
         refreshMessagesPage();
         showToast('已撤回');
       }
@@ -4987,6 +5129,9 @@ function appendChatMessageNode(roleId, msg) {
   holder.innerHTML = userMsgHTML(msg);
   const node = holder.firstElementChild;
   if (!node) return false;
+  /* 与收到消息一致：只让这条新节点做 opacity + transform 的轻量入场 */
+  node.classList.add('msg-enter');
+  node.addEventListener('animationend', () => node.classList.remove('msg-enter'), { once: true });
   if (insertAt) list.insertBefore(node, insertAt); else list.appendChild(node);
   /* 新插入的图片消息：绑大图浏览（长按菜单是 list 级事件委托，无需单独绑定） */
   $$('[data-chatimg]', node).forEach(img => {
@@ -5151,12 +5296,13 @@ function userPatRole(roleId) {
   if (now - userPatLastAt < 1200) return;  /* 顶部头像 / 气泡头像双击入口共用同一冷却 */
   userPatLastAt = now;
   const patText = composePatText('user');
-  chatOf(roleId).push({
+  const patMsg = {
     id: uid(), role: 'user', sender: 'user', type: 'pat',
     patText, ts: Date.now(), read: true
-  });
+  };
+  chatOf(roleId).push(patMsg);
   persist();
-  renderChatIf(roleId);
+  if (!chatAppendMessageNode(roleId, patMsg)) renderChatIf(roleId);
   refreshMessagesPage();
   showToast(`已拍了拍 ${taName(roleId)}`);
 }
@@ -5252,7 +5398,8 @@ function sendTaBurst(roleId, opts) {
     ended = true;
     typingMap.set(roleId, false);
     markUserRead(roleId);
-    renderChatIf(roleId);
+    chatSyncTyping(roleId);          /* 只移除打字占位，不重绘整表 */
+    chatMarkLastUserRead(roleId);    /* 只补「已读」小字 */
     refreshMessagesPage();
     if (typeof options.onDone === 'function') options.onDone();
   };
@@ -5260,7 +5407,7 @@ function sendTaBurst(roleId, opts) {
     if (gen !== (chatGenMap.get(roleId) || 0)) { finish(); return; }
     if (i >= total) { finish(); return; }
     typingMap.set(roleId, true);
-    renderChatIf(roleId);
+    chatSyncTyping(roleId);
     refreshMessagesPage();
     /* 首条按回复时间等待；后续每条同样受回复时间约束，再加一点连发间隔避免刷屏 */
     const delay = replyDelayMs() + (i > 0 ? randInt(500, 1500) : 0);
@@ -5302,14 +5449,15 @@ function taSayAfterDelay(roleId, makePayload) {
   if (!roleById(roleId)) return;
   const gen = chatGenMap.get(roleId) || 0;
   typingMap.set(roleId, true);
-  renderChatIf(roleId);
+  chatSyncTyping(roleId);
   refreshMessagesPage();
   const fire = () => {
-    if (gen !== (chatGenMap.get(roleId) || 0)) { typingMap.set(roleId, false); return; }
+    if (gen !== (chatGenMap.get(roleId) || 0)) { typingMap.set(roleId, false); chatSyncTyping(roleId); return; }
     typingMap.set(roleId, false);
     const payload = typeof makePayload === 'function' ? makePayload() : makePayload;
     if (payload) pushDreamMessage(roleId, payload);
-    renderChatIf(roleId);
+    chatSyncTyping(roleId);
+    chatMarkLastUserRead(roleId);
     refreshMessagesPage();
   };
   const delay = replyDelayMs();
@@ -5326,7 +5474,7 @@ function processReplyQueue(roleId) {
   if (count <= 0) {
     replyBusy.set(roleId, false);
     typingMap.set(roleId, false);
-    renderChatIf(roleId);
+    chatSyncTyping(roleId);
     refreshMessagesPage();
     return;
   }
@@ -5343,7 +5491,7 @@ function processReplyQueue(roleId) {
       if (gen !== (chatGenMap.get(roleId) || 0)) { replyBusy.set(roleId, false); return; }
       markUserRead(roleId, '');
       typingMap.set(roleId, false);
-      renderChatIf(roleId);
+      chatSyncTyping(roleId);
       finishReplyStep(roleId);
     }, randInt(450, 1000));
     return;
@@ -5388,7 +5536,7 @@ function taSendStickerReply(roleId, gen) {
   if (!pool.length) { taReplyWithCards(roleId, gen); return; }
   const quote = maybeTaQuote(roleId);
   typingMap.set(roleId, true);
-  renderChatIf(roleId);
+  chatSyncTyping(roleId);
   refreshMessagesPage();
   const fire = () => {
     if (gen !== (chatGenMap.get(roleId) || 0)) { finishReplyStep(roleId); return; }
@@ -5412,7 +5560,7 @@ function taSendStickerReply(roleId, gen) {
 function taSendMoodReply(roleId, gen) {
   const quote = maybeTaQuote(roleId);
   typingMap.set(roleId, true);
-  renderChatIf(roleId);
+  chatSyncTyping(roleId);
   refreshMessagesPage();
   const fire = () => {
     if (gen !== (chatGenMap.get(roleId) || 0)) { finishReplyStep(roleId); return; }
@@ -5440,7 +5588,8 @@ function taSendMoodReply(roleId, gen) {
 function finishReplyStep(roleId) {
   typingMap.set(roleId, false);
   refreshMessagesPage();
-  renderChatIf(roleId);
+  chatSyncTyping(roleId);          /* 只移除打字占位，不重绘整表 */
+  chatMarkLastUserRead(roleId);    /* 只补「已读」小字 */
   if ((replyQueue.get(roleId) || 0) > 0) {
     setTimeout(() => processReplyQueue(roleId), 420);
   } else {
@@ -5463,7 +5612,8 @@ function pushDreamMessage(roleId, payload) {
   const open = currentRoute.page === 'chat' && currentRoute.roleId === roleId;
   if (!open) state.unread[roleId] = (state.unread[roleId] || 0) + 1;
   persist();
-  if (open) renderChatMessages();
+  /* 增量插入：只有这一条新消息进 DOM，历史消息节点不重建 */
+  if (open && !chatAppendMessageNode(roleId, msg)) renderChatMessages();
   refreshMessagesPage();
   /* 聊天消息通知：字卡回复、主动回复、召回回应等全部经由本函数入聊天，这里统一触发 */
   if (!open) notifyChatMessage(roleId, msg);
@@ -5483,7 +5633,8 @@ function scheduleTaRecall(roleId, msg) {
     msg.recalled = true;
     msg.recalledAt = Date.now();
     persist();
-    if (currentRoute.page === 'chat' && currentRoute.roleId === roleId) renderChatMessages();
+    /* 只把这一个气泡换成撤回提示，其它消息节点不重建（避免整屏闪一下） */
+    if (currentRoute.page === 'chat' && currentRoute.roleId === roleId && !chatApplyRecall(roleId, msg)) renderChatMessages();
     refreshMessagesPage();
   }, randInt(4000, 10000));
 }
