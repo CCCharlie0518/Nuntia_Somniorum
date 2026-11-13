@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v9.1.1';
+const APP_VERSION = 'v9.1.2';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -18828,7 +18828,8 @@ const HOME_INGREDIENTS = [
   { name: '小蛋糕', emoji: '🍰', days: 3, ready: true, dialogue: '昨天路过买的，馋了就吃。' },
   { name: '果汁', emoji: '🧃', days: 10, ready: true, dialogue: '冰一会儿更好喝。' },
   { name: '巧克力', emoji: '🍫', days: 120, ready: true, dialogue: '心情不好就吃一块。' },
-  { name: '奶茶', emoji: '🧋', days: 1, ready: true, dialogue: '给你买的，少糖。' }
+  { name: '奶茶', emoji: '🧋', days: 1, ready: true, dialogue: '给你买的，少糖。' },
+  { name: '咖啡', emoji: '☕', days: 2, ready: true, dialogue: '路过咖啡店顺手买的，给你提提神。' }
 ];
 
 /* ---------- 阳台：内置种子 / 生长阶段 / TA 行为间隔 ---------- */
@@ -18913,7 +18914,8 @@ const HOME_TRACE_ROOMS = { living: '客厅', bedroom: '卧室', study: '书房',
 
 const HOME_TRACE_GAP_MS = 3 * 60 * 60 * 1000;    /* 离开超过 3 小时，回来时随机补 1~2 条生活痕迹 */
 const HOME_TA_BUY_GAP_MS = 5 * 60 * 60 * 1000;   /* TA 至少 5 小时才会补一次冰箱 */
-const HOME_TA_COOK_GAP_MS = 4 * 60 * 60 * 1000;  /* TA 至少 4 小时才会主动做一次饭 */
+const HOME_TA_COOK_GAP_MS = 4 * 60 * 60 * 1000;  /* 旧字段兼容：实际已由 HOME_TA_KITCHEN_GAP_MS 统一管控 */
+const HOME_TA_KITCHEN_GAP_MS = 3 * 60 * 60 * 1000; /* TA 在厨房的主动行为（做饭/吃熟食）共用间隔，两者互斥 */
 const HOME_TA_EAT_DELAY_MS = 60 * 1000;          /* 留给 TA 的菜，1 分钟后 TA 会吃掉并留字卡 */
 const HOME_RESTOCK_GAP_MS = 12 * 60 * 60 * 1000; /* 打开厨房/冰箱时，超过 12 小时才触发一次偷偷进货 */
 const HOME_EASTER_EGG_DAILY_MAX = 2;             /* 聊天点单彩蛋每天最多触发次数 */
@@ -18938,6 +18940,7 @@ function homeDefaultState() {
     dishes: [],
     lastTaBuyAt: 0,
     lastTaCookAt: 0,
+    lastTaKitchenAt: 0,
     lastFridgeRestockTime: 0,
     easterEggDate: '',
     easterEggCount: 0,
@@ -19017,6 +19020,7 @@ function normalizeHome(src) {
   out.lastTraceAt = Math.max(0, Number(s.lastTraceAt) || 0);
   out.lastTaBuyAt = Math.max(0, Number(s.lastTaBuyAt) || 0);
   out.lastTaCookAt = Math.max(0, Number(s.lastTaCookAt) || 0);
+  out.lastTaKitchenAt = Math.max(0, Number(s.lastTaKitchenAt) || 0);
   out.lastFridgeRestockTime = Math.max(0, Number(s.lastFridgeRestockTime) || 0);
   out.easterEggDate = typeof s.easterEggDate === 'string' ? s.easterEggDate : '';
   out.easterEggCount = Math.max(0, Math.round(Number(s.easterEggCount) || 0));
@@ -19321,7 +19325,7 @@ function mergeFridgeData() {
   return res.removed;
 }
 
-function homeAddFridgeItem(name, emoji, days, addedBy, ts, dialogue, ready) {
+function homeAddFridgeItem(name, emoji, days, addedBy, ts, dialogue, ready, count) {
   if (!state || !state.home) return null;
   const nm = String(name == null ? '' : name).trim().slice(0, 20);
   if (!nm) return null;
@@ -19329,14 +19333,15 @@ function homeAddFridgeItem(name, emoji, days, addedBy, ts, dialogue, ready) {
   const by = (addedBy === 'ta' || addedBy === 'balcony') ? addedBy : 'user';
   const now = Number(ts) || Date.now();
   const d = Math.max(1, Number(days) || 7);
+  const qty = Math.max(1, Math.round(Number(count) || 1));   /* 份数：默认 1，非法值回退 1 */
   const expireAt = now + d * 86400000;
   /* 严格查重：只认 名称 + Emoji + 来源（统一 trim 后比较，类型一致），
    * 绝不把保质期 / 时间戳当作判定条件。名称相同但来源不同必须独立成条。 */
   const key = homeFridgeKey(nm, em, by);
   const same = state.home.fridge.find(f => f && homeFridgeKey(f.name, f.emoji, f.addedBy) === key);
   if (same) {
-    /* 命中就累加数量，绝不再 push 一条新记录 */
-    same.count = Math.max(1, Math.round(Number(same.count) || 1)) + 1;
+    /* 命中就累加本次份数，绝不再 push 一条新记录 */
+    same.count = Math.max(1, Math.round(Number(same.count) || 1)) + qty;
     /* 新的一份更新鲜：到期时间取两者较晚的那个，别被旧记录拖累 */
     same.buyTime = now;
     same.boughtAt = now;
@@ -19348,7 +19353,7 @@ function homeAddFridgeItem(name, emoji, days, addedBy, ts, dialogue, ready) {
     id: uid(),
     name: nm,
     emoji: em,
-    count: 1,
+    count: qty,
     boughtAt: now,
     buyTime: now,
     expireAt,
@@ -19371,10 +19376,12 @@ function homeFridgeRestockIfDue() {
   const count = randInt(1, 2);
   const pool = HOME_INGREDIENTS.slice();
   const names = [];
+  const specialQty = n => /咖啡|奶茶/.test(n);   /* 饮品一次只进 1~2 份 */
   for (let i = 0; i < count && pool.length; i++) {
     const ing = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
-    homeAddFridgeItem(ing.name, ing.emoji, ing.days, 'ta', now);
-    names.push(ing.emoji + ing.name);
+    const qty = specialQty(ing.name) ? randInt(1, 2) : randInt(1, 3);
+    homeAddFridgeItem(ing.name, ing.emoji, ing.days, 'ta', now, undefined, undefined, qty);
+    names.push(ing.emoji + ing.name + (qty > 1 ? '×' + qty : ''));
   }
   persist(true);
   showToast(`冰箱里好像多出了几样东西……TA偷偷去进货了（${names.join('、')}）`);
@@ -19561,7 +19568,12 @@ function homeTaBuyIfDue(notify) {
     picked.push(ing);
   }
   if (!picked.length) { persist(); return false; }
-  picked.forEach(ing => homeAddFridgeItem(ing.name, ing.emoji, ing.days, 'ta'));
+  /* 特殊食材（咖啡、奶茶等饮品）TA 一次只买 1~2 份，其余食材 1~3 份随机 */
+  const specialQty = n => /咖啡|奶茶/.test(n);
+  picked.forEach(ing => {
+    const qty = specialQty(ing.name) ? homeRandInt(1, 2) : homeRandInt(1, 3);
+    homeAddFridgeItem(ing.name, ing.emoji, ing.days, 'ta', undefined, undefined, undefined, qty);
+  });
   homePushTrace('kitchen', `TA把刚买回来的${picked.map(p => p.name).join('、')}放进了冰箱`, now, 'ta');
   persist();
   if (notify) {
@@ -19570,15 +19582,12 @@ function homeTaBuyIfDue(notify) {
   homeRefreshIfOpen(['readtogether', 'homefridge', 'homekitchen']);
   return true;
 }
-/* TA 概率性主动做饭：消耗冰箱里真实存在的食材，把做好的菜放到灶台 */
-function homeTaCookIfDue() {
+/* TA 主动做饭（核心）：消耗冰箱里真实存在的食材，把做好的菜放到灶台。
+ * 间隔与概率由 homeTaKitchenIfDue 统一管控，本函数只负责「真的做一顿饭」。 */
+function homeTaCookNow(now) {
   const h = state.home;
-  const now = Date.now();
-  if (now - (Number(h.lastTaCookAt) || 0) < HOME_TA_COOK_GAP_MS) return false;
-  h.lastTaCookAt = now;
-  if (Math.random() > 0.5) { persist(); return false; }
   const usable = homeAllRecipes().filter(r => homeRecipeCheck(r).ok);
-  if (!usable.length) { persist(); return false; }
+  if (!usable.length) return false;
   const recipe = homeRandPick(usable);
   homeConsumeForRecipe(recipe);
   h.dishes.unshift({
@@ -19595,6 +19604,66 @@ function homeTaCookIfDue() {
   persist();
   fireSystemNotification(taName(homeRoleId()), `用冰箱里的食材给你做了【${recipe.name}】`, 'home-ta-cook-' + now, { page: 'sub', name: 'homestove' });
   homeRefreshIfOpen(['readtogether', 'homestove', 'homekitchen']);
+  return true;
+}
+/* TA 主动吃熟食（核心）：从冰箱里挑一份 isReadyToEat 的食材吃掉。
+ * - 用户买的熟食：吃了之后从主字卡库抽 1 张字卡，作为 TA 的普通聊天消息推入主聊天，并触发未读红点。
+ * - TA 自己买的 / 阳台种的：只在生活痕迹里记录，不发聊天消息。 */
+const HOME_TA_EAT_VERBS = { drink: '喝掉了', food: '吃掉了' };
+function homeTaEatVerb(emoji) {
+  return /🥛|🧋|🍵|🍶|☕|🥤|🍷|🍸|🍹/.test(String(emoji || '')) ? HOME_TA_EAT_VERBS.drink : HOME_TA_EAT_VERBS.food;
+}
+function homeTaEatReadyNow(now) {
+  const h = state.home;
+  /* 只挑熟食且数量 > 0 的食材 */
+  const ready = h.fridge.filter(f => f.isReadyToEat === true && Math.max(0, Math.round(Number(f.count) || 1)) > 0);
+  if (!ready.length) return false;
+  const picked = homeRandPick(ready);
+  const idx = h.fridge.findIndex(f => f.id === picked.id);
+  if (idx < 0) return false;
+  const rec = h.fridge[idx];
+  /* 只扣当前这一条记录的 count；归零才移除，绝不影响其它来源的同名食材，也绝不出负数 */
+  rec.count = Math.max(0, Math.round(Number(rec.count) || 1) - 1);
+  const eaten = { name: rec.name, emoji: rec.emoji, addedBy: rec.addedBy, dialogue: rec.dialogue };
+  if (rec.count <= 0) h.fridge.splice(idx, 1);
+  const verb = homeTaEatVerb(eaten.emoji);
+  homePushTrace('kitchen', `TA打开冰箱，拿走了【${eaten.emoji} ${eaten.name}】${verb}。`, now, 'ta');
+
+  /* 只有用户买的熟食才发聊天消息：从主字卡库随机抽 1 张字卡 */
+  if (eaten.addedBy === 'user') {
+    const roleId = homeRoleId();
+    if (roleId && roleById(roleId)) {
+      let text = '';
+      try { text = String(composeCardText(roleId, { key: 'home-eat-ready:' + eaten.name }) || '').trim(); } catch (e) { text = ''; }
+      /* 字卡库为空 / 抽取出空串时兜底，绝不把空白消息推进聊天 */
+      if (!text) text = `你买的${eaten.name}真好吃，没收了~`;
+      pushDreamMessage(roleId, {
+        type: 'text',
+        sender: 'ta',
+        content: text,
+        text: text
+      });
+    }
+  }
+  persist();
+  homeRefreshIfOpen(['homefridge', 'homekitchen', 'readtogether']);
+  return true;
+}
+/* 厨房主动行为调度：做饭 / 吃熟食 互斥触发。
+ * 概率：40% 做饭、30% 吃熟食、30% 本轮什么都不做。
+ * 共用 HOME_TA_KITCHEN_GAP_MS 间隔，避免同一轮里做饭又吃东西。 */
+function homeTaKitchenIfDue() {
+  const h = state.home;
+  const now = Date.now();
+  if (now - (Number(h.lastTaKitchenAt) || 0) < HOME_TA_KITCHEN_GAP_MS) return false;
+  h.lastTaKitchenAt = now;
+  const r = Math.random();
+  if (r < 0.4) {
+    homeTaCookNow(now);            /* 没食材做不了饭：直接结束本轮，不再改吃熟食（保持互斥概率准确） */
+  } else if (r < 0.7) {
+    homeTaEatReadyNow(now);        /* 没熟食：直接结束本轮 */
+  }
+  persist();                        /* 至少落盘 lastTaKitchenAt，避免间隔不生效 */
   return true;
 }
 /* 留给 TA 的菜：稍后 TA 会吃掉，并在主聊天里留下一张字卡留言 */
@@ -19701,7 +19770,7 @@ function homeOnBoot() {
   }
   homeEnsureTraces();
   homeTaBuyIfDue(false);
-  homeTaCookIfDue();
+  homeTaKitchenIfDue();
   homeSettleCooking();
   homeTaEatLeftDishes();
   h.lastVisitMe = now;
@@ -19717,7 +19786,7 @@ function homeTick() {
   homeSettleCooking();
   homeTaEatLeftDishes();
   homeTaBuyIfDue(true);
-  homeTaCookIfDue();
+  homeTaKitchenIfDue();
   if (rolled || traceAdded || grown) persist();
   if (rolled) homeRefreshIfOpen(['readtogether', 'homebedroom', 'wardrobe']);
   if (grown) homeRefreshIfOpen(['homebalcony']);
@@ -20870,6 +20939,7 @@ function homeOpenAddIngredient() {
       <div class="field"><label>食材名称</label><input class="input" id="hkAddName" maxlength="20" placeholder="例如：番茄"></div>
       <div class="field"><label>食材 Emoji</label><input class="input" id="hkAddEmoji" maxlength="4" placeholder="例如：🍅"></div>
       <div class="field"><label>保质期（天）</label><input class="input" id="hkAddDays" type="number" min="1" max="365" value="7"></div>
+      <div class="field"><label>份数</label><input class="input" id="hkAddCount" type="number" min="1" max="99" value="1"></div>
       <div class="field"><label>类型</label>
         <select class="input" id="hkAddReady">
           <option value="0" selected>烹饪食材（需去灶台加工）</option>
@@ -20883,11 +20953,12 @@ function homeOpenAddIngredient() {
         const name = $('#hkAddName', modal.el).value.trim();
         const emoji = $('#hkAddEmoji', modal.el).value.trim() || '🥡';
         const days = clamp(Math.round(Number($('#hkAddDays', modal.el).value) || 7), 1, 365);
+        const count = clamp(Math.round(Number($('#hkAddCount', modal.el).value) || 1), 1, 99);
         const ready = $('#hkAddReady', modal.el).value === '1';
         if (!name) { showToast('请填写食材名称'); return false; }
-        homeAddFridgeItem(name, emoji, days, 'user', undefined, undefined, ready);
+        homeAddFridgeItem(name, emoji, days, 'user', undefined, undefined, ready, count);
         persist(true);
-        showToast(`已把【${name}】放进冰箱`);
+        showToast(`已把【${name}】×${count} 放进冰箱`);
         homeRefreshIfOpen(['homefridge', 'homekitchen', 'readtogether']);
       } }
     ]
