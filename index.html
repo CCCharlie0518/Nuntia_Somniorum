@@ -102,8 +102,8 @@
 </div>
 <div id="modalRoot"></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<!-- 表情包批量导入：多选图片输入框（常驻，避免页面重渲染后丢失监听） -->
-<input type="file" id="stickerBatchInput" accept="image/*" multiple style="display:none">
+<!-- 表情包批量传图：多选图片输入框（常驻，避免页面重渲染后丢失监听；由【🖼️ 批量传图】按钮触发） -->
+<input type="file" id="stickerBatchInput" accept="image/*" multiple style="display:none" aria-hidden="true">
 
 <!-- 检查更新：二次确认弹窗（默认隐藏，层级高于全部既有浮层，由 app.js 打开/关闭） -->
 <div class="upd-mask hidden" id="updateConfirmMask">

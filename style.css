@@ -497,7 +497,9 @@ body.chat-open{overflow:hidden;position:fixed;top:0;left:0;right:0;bottom:0;widt
 .row-between{display:flex;align-items:center;justify-content:space-between;gap:8px;}
 .muted{color:var(--sub);font-size:12px;line-height:1.6;}
 /* ===== 表情包管理：顶部操作按钮组（【批量导入】与【＋ 添加】保持同一套 .btn 样式） ===== */
-.sticker-actions{display:flex;align-items:center;gap:8px;flex:none;}
+.sticker-actions{display:flex;align-items:stretch;gap:8px;flex:none;margin-top:10px;}
+/* 两个按钮等分整行宽度，替换旧按钮后不留空洞 */
+.sticker-actions .btn{flex:1 1 0;min-width:0;padding:10px 8px;white-space:nowrap;font-size:13px;}
 /* ===== 批量导入时的全局 Loading 遮罩（极简：白底提示框 + 小转圈） ===== */
 .sticker-loading{position:fixed;inset:0;z-index:9998;display:grid;place-items:center;background:rgba(0,0,0,.28);}
 .st-loading-box{
@@ -563,6 +565,21 @@ input[type="date"]::-webkit-date-and-time-value,
 input[type="time"]::-webkit-date-and-time-value{
   text-align:left;
   min-width:0;
+}
+/* 数字输入框（保质期 / 份数）：与其它 .input 保持统一外观，隐藏默认 spinner 避免布局跳动 */
+.input[type="number"]{
+  box-sizing:border-box;
+  display:block;
+  width:100%;
+  max-width:100%;
+  min-width:0;
+  margin:0;
+  -moz-appearance:textfield;
+}
+.input[type="number"]::-webkit-outer-spin-button,
+.input[type="number"]::-webkit-inner-spin-button{
+  -webkit-appearance:none;
+  margin:0;
 }
 /* 包裹输入框的 .field：允许在 flex 行里收缩，不保留固有宽度 */
 .field{
@@ -680,6 +697,24 @@ input[type="time"],
   display:grid;place-items:center;margin-bottom:6px;
 }
 .sticker-card .thumb img{max-width:100%;max-height:100%;object-fit:contain;}
+/* 防裂图：加载失败的图片隐藏，父容器显示占位图标（灰底已存在，这里补图标） */
+img.img-broken{display:none !important;}
+.thumb-broken{position:relative;background:#f0f1f4;}
+.thumb-broken::after{
+  content:'🖼️';position:absolute;inset:0;display:grid;place-items:center;
+  font-size:22px;opacity:.35;pointer-events:none;
+}
+/* 聊天气泡里的表情加载失败时，保持一个 76px 的占位方块，避免气泡塌陷 */
+.sticker-bubble.thumb-broken{min-width:76px;min-height:76px;border-radius:12px;background:#f0f1f4;}
+/* 链接导入弹窗：格式提示 + 等宽多行输入框 */
+.stk-link-tip{
+  font-size:12px;color:#8b909a;line-height:1.7;margin-bottom:8px;
+  white-space:pre-line;background:#f5f6f8;border-radius:9px;padding:9px 11px;
+}
+.stk-link-area{
+  min-height:150px;font-family:ui-monospace,Menlo,Consolas,monospace;
+  font-size:12.5px;line-height:1.7;
+}
 .sticker-card .nm{font-size:12px;color:#5f6672;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
 /* ===================== 信件 ===================== */

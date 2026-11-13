@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v9.1.2';
+const APP_VERSION = 'v9.1.3';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -2072,6 +2072,8 @@ function showLightbox(src, list, index) {
   const img = $('img', box);
   const count = $('.lb-count', box);
   const paint = () => {
+    /* 外链图片禁止发送 referrer，绕过图床防盗链 */
+    if (/^https?:\/\//i.test(String(arr[i] || ''))) img.referrerPolicy = 'no-referrer';
     img.src = arr[i];
     if (count) count.textContent = arr.length > 1 ? `${i + 1} / ${arr.length}` : '';
     img.onerror = () => imgFallback(img);
@@ -3810,7 +3812,7 @@ function renderChatMessages(keepScroll) {
     if (m.recalled) {
       inner = `<div class="recall-tip">${mine ? '你' : esc(dn)}撤回了一条消息</div>`;
     } else if (m.type === 'sticker' && m.image) {
-      inner = `<div class="bubble sticker-bubble">${quoteHTML}<img src="${esc(m.image)}" alt="" data-sticker-img></div>`;
+      inner = `<div class="bubble sticker-bubble">${quoteHTML}${stickerImg(m.image, '表情', null, 'data-sticker-img')}</div>`;
     } else if (m.type === 'quiz' && m.quiz) {
       const unanswered = m.isAnswered !== true;
       inner = `${quizCardHTML(m.quiz, null, unanswered ? `已发送给 ${esc(role.name)}，等待回答…` : '已回答', unanswered ? 'unanswered' : '')}`;
@@ -5613,7 +5615,7 @@ function renderStickerSheet(roleId) {
     </div>
     ${mine.length
       ? `<div class="sticker-grid">${mine.map(s =>
-          `<button class="sticker-cell" data-sticker="${s.id}"><img src="${esc(s.data)}" alt="${esc(s.name)}"></button>`).join('')}</div>`
+          `<button class="sticker-cell" data-sticker="${s.id}">${stickerImg(s.data, s.name)}</button>`).join('')}</div>`
       : '<div class="empty" style="padding:18px">还没有表情包<br>去「表情包管理」添加一些吧</div>'}`;
 
   $('[data-sticker-manage]').addEventListener('click', () => {
@@ -13981,6 +13983,98 @@ function stickerList() {
   return stickerTab === 'ta' ? state.taStickers : state.userStickers;
 }
 
+/* ===== 表情图渲染：防裂图容错 =====
+ * 外链图片统一加 referrerpolicy="no-referrer" 绕过防盗链；加载失败时由 onerror 换成占位背景，
+ * 绝不把浏览器的裂图图标暴露给用户。 */
+function stickerImg(src, name, cls, extraAttr) {
+  const s = String(src == null ? '' : src);
+  const alt = String(name == null ? '' : name);
+  const isExt = !/^data:image\//i.test(s) && /^https?:\/\//i.test(s);
+  return `<img src="${esc(s)}" alt="${esc(alt)}"${cls ? ` class="${esc(cls)}"` : ''}` +
+    `${extraAttr ? ' ' + extraAttr : ''}` +
+    `${isExt ? ' referrerpolicy="no-referrer"' : ''} loading="lazy"` +
+    ` onerror="stickerImgError(this)">`;
+}
+/* 加载失败：隐藏 img 本身并给父容器打上占位样式（父级已有灰底，会显示占位图标） */
+function stickerImgError(el) {
+  if (!el || el.dataset.failed === '1') return;
+  el.dataset.failed = '1';
+  el.classList.add('img-broken');
+  el.removeAttribute('src');
+  if (el.parentNode) el.parentNode.classList.add('thumb-broken');
+}
+
+/* ===== 链接导入：多行复杂格式智能解析 ===== */
+/* 合法后缀：gif/png/jpg/jpeg/webp，忽略大小写，允许带 ?query 或 #hash */
+function stickerUrlOk(url) {
+  const u = String(url == null ? '' : url).trim();
+  if (!/^https?:\/\/[^\s]+$/i.test(u)) return false;
+  return /\.(gif|png|jpe?g|webp)(\?[^\s]*)?(#\S*)?$/i.test(u);
+}
+/* 解析文本框内容，返回 { items:[{name,url}], invalid:错误行数 }
+ * 主解析严格使用约定正则提取「名称 + 链接」；另补一轮兜底，支持整行只有裸链接（名称走默认）。 */
+function parseStickerLinks(text) {
+  const src = String(text == null ? '' : text);
+  const items = [];
+  const seen = new Set();
+  let invalid = 0;
+  const linkRe = /([^:：\n]+)[:：]?\s*(https?:\/\/[^\s]+)/g;
+  let m;
+  while ((m = linkRe.exec(src)) !== null) {
+    /* 名称去掉换行与首尾空格；链接同样 trim */
+    const name = String(m[1] || '').replace(/[\r\n]/g, ' ').trim();
+    const url = String(m[2] || '').trim();
+    if (seen.has(url)) continue;
+    seen.add(url);
+    if (!stickerUrlOk(url)) { invalid++; continue; }   /* 后缀不合法：记一行格式错误 */
+    items.push({ name: (name || '未命名表情').slice(0, 20), url });
+  }
+  /* 兜底：整行只有一个裸链接（没有名称）也允许导入，名称用「未命名表情」 */
+  src.split(/\r?\n/).forEach(line => {
+    const t = line.trim();
+    if (!t) return;
+    const bare = (t.match(/https?:\/\/[^\s]+/) || [])[0];
+    if (!bare) { invalid++; return; }                  /* 这一行完全没有链接 → 格式错误 */
+    if (seen.has(bare)) return;                        /* 已被主解析收走，跳过 */
+    seen.add(bare);
+    if (!stickerUrlOk(bare)) { invalid++; return; }
+    items.push({ name: '未命名表情', url: bare });
+  });
+  return { items, invalid };
+}
+/* 链接导入弹窗 */
+function openStickerLinkImport() {
+  /* 锁定时段的目标库，弹窗打开后再切 Tab 也不会写错分类 */
+  const targetKey = stickerTab === 'ta' ? 'taStickers' : 'userStickers';
+  const modal = showModal({
+    title: stickerTab === 'ta' ? '链接导入（TA 的表情包）' : '链接导入（我的表情包）',
+    wide: true,
+    body: `
+      <div class="stk-link-tip">请粘贴带名称的链接，每行一个。格式例如：
+睡觉/晚安: https://xxx.gif
+开心: https://xxx.jpeg</div>
+      <textarea class="textarea stk-link-area" id="stkLinkText" placeholder="睡觉/晚安: https://xxx.gif&#10;开心: https://xxx.jpeg"></textarea>
+    `,
+    actions: [
+      { label: '取消' },
+      { label: '确认导入', kind: 'primary', onClick: async el => {
+        const raw = $('#stkLinkText', el).value;
+        const res = parseStickerLinks(raw);
+        if (!res.items.length) {
+          showToast(res.invalid ? `没有可导入的链接，${res.invalid} 行格式错误` : '请先粘贴链接');
+          return false;   /* 保持弹窗打开，方便用户修改 */
+        }
+        const added = res.items.map(it => ({ id: uid(), name: it.name, data: it.url, ts: Date.now() }));
+        const ok = await saveStickerBatch(added, targetKey);
+        if (!ok) return false;
+        if (currentRoute && currentRoute.page === 'sub' && currentRoute.name === 'stickers') renderStickersPage();
+        showToast(`成功导入 ${added.length} 张${res.invalid ? `，有 ${res.invalid} 行格式错误未导入` : ''}`);
+      } }
+    ]
+  });
+  return modal;
+}
+
 function renderStickersPage() {
   const list = stickerList();
   const isTa = stickerTab === 'ta';
@@ -13991,18 +14085,16 @@ function renderStickersPage() {
     </div>
     <div class="top-stat"><span>${isTa ? 'TA 的表情包' : '我的表情包'}共 <b>${list.length}</b> 个</span></div>
     <div class="panel">
-      <div class="row-between">
-        <div class="muted">${isTa ? '这里的表情只会在 TA 回复时随机发出，你不会在聊天面板看到。' : '支持本地上传（自动压缩）或填写图片链接，聊天面板里发送。'}</div>
-        <div class="sticker-actions">
-          <button class="btn" id="stickerBatchBtn">批量导入</button>
-          <button class="btn primary" id="stickerAdd">＋ 添加</button>
-        </div>
+      <div class="muted">${isTa ? '这里的表情只会在 TA 回复时随机发出，你不会在聊天面板看到。' : '支持粘贴图片链接批量导入，或从相册多选图片（自动压缩）。'}</div>
+      <div class="sticker-actions">
+        <button class="btn sticker-btn-link" id="stickerLinkBtn" type="button">🔗 链接导入</button>
+        <button class="btn primary sticker-btn-upload" id="stickerBatchBtn" type="button">🖼️ 批量传图</button>
       </div>
     </div>
     ${list.length
       ? `<div class="sticker-manage-grid">${list.map(s => `
           <div class="sticker-card">
-            <div class="thumb" data-preview="${s.id}"><img src="${esc(s.data)}" alt=""></div>
+            <div class="thumb" data-preview="${s.id}">${stickerImg(s.data, s.name)}</div>
             <div class="nm">${esc(s.name)}</div>
             <div style="display:flex;justify-content:space-between;margin-top:5px">
               <button class="btn-sm" data-sticker-edit="${s.id}">改名</button>
@@ -14018,8 +14110,8 @@ function renderStickersPage() {
     renderStickersPage();
   }));
 
-  $('#stickerAdd').addEventListener('click', () => openStickerEditor(null));
-  /* 批量导入按钮：唤起常驻的多选输入框 */
+  $('#stickerLinkBtn').addEventListener('click', () => openStickerLinkImport());
+  /* 批量传图按钮：唤起常驻的多选输入框 */
   $('#stickerBatchBtn').addEventListener('click', () => {
     const input = $('#stickerBatchInput');
     if (!input) return;
@@ -14046,9 +14138,11 @@ function renderStickersPage() {
 }
 
 /* ===== 表情包批量导入 ===== */
-/* 压缩单张图片：等比缩放到最大边 maxWidth，再转 JPEG(0.7) 的 Base64，回调返回 dataURL 或 null */
-function compressImage(file, maxWidth, callback) {
+/* 压缩单张图片：等比缩放到最大边 maxWidth，再转 JPEG 的 Base64，回调返回 dataURL 或 null。
+ * quality 默认 0.6（极限压缩：表情包只需能在 130px 气泡里看清，体积越小越不容易撑爆存储） */
+function compressImage(file, maxWidth, callback, quality) {
   const max = Math.max(1, Number(maxWidth) || 200);
+  const q = clamp(Number(quality) || 0.6, 0.1, 1);
   const reader = new FileReader();
   reader.onload = () => {
     const img = new Image();
@@ -14064,7 +14158,7 @@ function compressImage(file, maxWidth, callback) {
       ctx.fillStyle = '#fff';
       ctx.fillRect(0, 0, w, h);
       ctx.drawImage(img, 0, 0, w, h);
-      callback(canvas.toDataURL('image/jpeg', 0.7));
+      callback(canvas.toDataURL('image/jpeg', q));
     };
     img.onerror = () => callback(null);
     img.src = reader.result;
@@ -14074,8 +14168,8 @@ function compressImage(file, maxWidth, callback) {
 }
 
 /* Promise 版压缩：供 async/await 串行调用，保证一张处理完再处理下一张 */
-function compressImageAsync(file, maxWidth) {
-  return new Promise(resolve => compressImage(file, maxWidth, resolve));
+function compressImageAsync(file, maxWidth, quality) {
+  return new Promise(resolve => compressImage(file, maxWidth, resolve, quality));
 }
 
 /* 批量导入期间的全局 Loading 遮罩 */
@@ -14119,7 +14213,7 @@ async function saveStickerBatch(added, key) {
   }
 }
 
-/* 批量导入主流程：逐张读取并压缩（最大边 200px / JPEG 0.7），全部完成后统一入库。
+/* 批量导入主流程：逐张读取并压缩（最大边 240px / JPEG 0.6），全部完成后统一入库。
  * 导入开始时锁定目标库，处理途中切换 Tab 也不会写错地方 */
 async function importStickerFiles(files) {
   const list = Array.from(files || []);
@@ -14130,10 +14224,10 @@ async function importStickerFiles(files) {
   for (let i = 0; i < list.length; i++) {   /* 串行 for + await：绝不同时压缩多张，避免浏览器卡死 */
     const file = list[i];
     if (!/^image\//.test(file.type)) continue;
-    const data = await compressImageAsync(file, 200);
+    const data = await compressImageAsync(file, 240, 0.6);
     if (!data) continue;
-    const rawName = String(file.name || '').replace(/\.(png|jpg|jpeg|gif|webp|bmp|heic)$/i, '').trim();
-    const name = (rawName || '表情').slice(0, 20);
+    /* 统一命名「本地图片_X」，X 按本次导入序号递增，避免一批图重名 */
+    const name = `本地图片_${added.length + 1}`.slice(0, 20);
     added.push({ id: uid(), name, data, ts: Date.now() });
   }
   hideStickerLoading();
@@ -14144,7 +14238,7 @@ async function importStickerFiles(files) {
   const ok = await saveStickerBatch(added, targetKey);
   if (!ok) return;                          /* 失败提示已在保存函数内给出 */
   if (currentRoute && currentRoute.page === 'sub' && currentRoute.name === 'stickers') renderStickersPage();
-  showToast(`成功导入了 ${added.length} 张表情包`);
+  showToast(`成功导入 ${added.length} 张表情包`);
 }
 
 function openStickerEditor(id) {
@@ -14156,7 +14250,7 @@ function openStickerEditor(id) {
     title: sticker ? '编辑表情' : (stickerTab === 'ta' ? '添加 TA 的表情包' : '添加表情包'),
     body: `
       <div style="text-align:center;margin-bottom:10px" id="stPreviewBox">
-        ${sticker ? `<img src="${esc(sticker.data)}" style="max-height:110px;border-radius:10px" alt="">` : '<div class="empty" style="padding:12px">还没有选择图片</div>'}
+        ${sticker ? stickerImg(sticker.data, sticker.name, null, 'style="max-height:110px;border-radius:10px"') : '<div class="empty" style="padding:12px">还没有选择图片</div>'}
       </div>
       <div class="field">
         <label>名称</label>
@@ -14196,7 +14290,7 @@ function openStickerEditor(id) {
       const paint = () => {
         const v = urlInput.value.trim();
         preview.innerHTML = v
-          ? `<img src="${esc(v)}" style="max-height:110px;border-radius:10px" alt="">`
+          ? stickerImg(v, '预览', null, 'style="max-height:110px;border-radius:10px"')
           : '<div class="empty" style="padding:12px">还没有选择图片</div>';
       };
       urlInput.addEventListener('input', paint);
