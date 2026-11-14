@@ -1921,6 +1921,26 @@ canvas.gmk{display:block;width:100%;aspect-ratio:1/1;touch-action:manipulation;c
 
 /* 撤回提示：气泡位置显示居中的灰色小字 */
 .msg .recall-tip{font-size:12px;color:#8b909a;padding:3px 2px;font-style:normal;}
+/* 撤回提示：点击提示本身展开 / 收起被撤回的原话 */
+.msg .recall-tip.recall-tip-clickable{cursor:pointer;-webkit-user-select:none;user-select:none;}
+.msg .recall-tip .recall-tip-text{display:inline-block;}
+.msg .recall-tip.revealed .recall-tip-text{color:#747a84;}
+.msg .recall-tip .recalled-content{
+  display:block;margin-top:4px;padding:5px 9px;border-radius:8px;
+  background:rgba(24,44,74,.05);
+  color:#a7acb6;font-size:12px;line-height:1.6;
+  text-decoration:line-through;
+  text-decoration-color:rgba(150,156,166,.75);
+  text-decoration-thickness:1px;
+  overflow-wrap:anywhere;word-break:break-word;
+  opacity:1;transition:opacity .3s ease;
+  animation:recalledFade .3s ease;
+}
+.msg .recall-tip .recalled-content.hidden{display:none;animation:none;}
+@keyframes recalledFade{
+  from{opacity:0;transform:translateY(-2px);}
+  to{opacity:1;transform:none;}
+}
 
 /* 输入框上方的引用预览条 */
 .chat-quote-bar{display:flex;align-items:center;gap:8px;padding:7px 12px;background:#f2f4f7;border-top:1px solid var(--line);flex-shrink:0;}

@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v9.2.1';
+const APP_VERSION = 'v9.2.2';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -3701,6 +3701,18 @@ function ensureChatDelegation(list) {
     const roleId = currentRoute.roleId;
     if (t.closest('#chatMoreBtn')) { loadOlderMessages(); return; }
     if (t.closest('#chatNewerBtn')) { loadNewerMessages(); return; }
+    /* 撤回提示：点一下展开/收起被撤回的原话；
+       先拦住冒泡，避免触发外层消息的长按菜单等其它交互 */
+    const recallTip = t.closest('[data-recall-tip]');
+    if (recallTip) {
+      e.stopPropagation();
+      e.preventDefault();
+      const box = $('.recalled-content', recallTip);
+      if (!box) { showToast('内容已过期'); return; }
+      box.classList.toggle('hidden');
+      recallTip.classList.toggle('revealed', !box.classList.contains('hidden'));
+      return;
+    }
     const rp = t.closest('[data-rpclaim]');
     if (rp) { e.stopPropagation(); claimRedPacket(roleId, rp.dataset.rpclaim); return; }
     const gift = t.closest('[data-giftclaim]');
@@ -3892,9 +3904,9 @@ function renderChatMessages(keepScroll, appendMsg) {
       ? `<div class="quote-block"><span class="quote-who">${esc(q.who || '')}</span><span class="quote-text">${esc(q.text || '')}</span></div>`
       : '';
     let inner = '';
-    /* 已撤回：气泡内容整块替换为灰色提示 */
+    /* 已撤回：气泡内容整块替换为灰色提示，点一下可看回被撤回的原话 */
     if (m.recalled) {
-      inner = `<div class="recall-tip">${mine ? '你' : esc(dn)}撤回了一条消息</div>`;
+      inner = `<div class="recall-tip recall-tip-clickable" data-recall-tip="${esc(m.id)}">${recallTipHTML(m, dn)}</div>`;
     } else if (m.type === 'sticker' && m.image) {
       inner = `<div class="bubble sticker-bubble">${quoteHTML}${stickerImg(m.image, '表情', null, 'data-sticker-img')}</div>`;
     } else if (m.type === 'quiz' && m.quiz) {
@@ -4201,6 +4213,24 @@ function chatAppendMessageNode(roleId, msg) {
   return true;
 }
 
+/* 撤回时保存原文：文字取正文，表情/图片给一个可读的占位说明 */
+function recallTextOf(msg) {
+  if (!msg) return '';
+  if (msg.type === 'sticker') return '[表情]';
+  const text = String(msg.content == null ? '' : msg.content).trim();
+  if (text) return text;
+  return Array.isArray(msg.images) && msg.images.length ? '[图片]' : '';
+}
+
+/* 撤回提示内部结构：正文提示 + 默认隐藏的原文容器。
+ * 旧数据没有 recalledText 时不渲染内容容器，点击时只会提示「内容已过期」 */
+function recallTipHTML(m, dn) {
+  const mine = m.sender ? m.sender === 'user' : m.role === 'user';
+  const text = typeof m.recalledText === 'string' ? m.recalledText : '';
+  return `<span class="recall-tip-text">${mine ? '你' : esc(dn)}撤回了一条消息</span>`
+    + (text ? `<div class="recalled-content hidden">${esc(text)}</div>` : '');
+}
+
 /* TA 撤回：只替换这一条气泡的内容，其余消息节点完全不重绘 */
 function chatApplyRecall(roleId, msg) {
   if (currentRoute.page !== 'chat' || currentRoute.roleId !== roleId) return false;
@@ -4214,10 +4244,10 @@ function chatApplyRecall(roleId, msg) {
   Array.from(body.children).forEach(ch => { if (!ch.classList.contains('msg-time')) ch.remove(); });
   const role = roleById(roleId);
   const dn = String((role && role.name) || '').trim() || 'TA';
-  const mine = msg.sender ? msg.sender === 'user' : msg.role === 'user';
   const tip = document.createElement('div');
-  tip.className = 'recall-tip';
-  tip.textContent = `${mine ? '你' : dn}撤回了一条消息`;
+  tip.className = 'recall-tip recall-tip-clickable';
+  tip.dataset.recallTip = String(msg.id);
+  tip.innerHTML = recallTipHTML(msg, dn);
   body.insertBefore(tip, body.firstChild);
   return true;
 }
@@ -4584,6 +4614,8 @@ function openMessageActions(roleId, msgId) {
   if (mine && !msg.recalled) {
     items.push({
       label: '撤回', onClick: () => {
+        /* 先留一份原文，再标记撤回；该字段随聊天记录一起持久化 */
+        if (!msg.recalledText) msg.recalledText = recallTextOf(msg);
         msg.recalled = true;
         msg.recalledAt = Date.now();
         persist();
@@ -5656,6 +5688,8 @@ function scheduleTaRecall(roleId, msg) {
   setTimeout(() => {
     if (gen !== (chatGenMap.get(roleId) || 0)) return;
     if (msg.recalled) return;
+    /* 撤回前留一份原文，持久化后可在提示里点击查看 */
+    if (!msg.recalledText) msg.recalledText = recallTextOf(msg);
     msg.recalled = true;
     msg.recalledAt = Date.now();
     persist();
