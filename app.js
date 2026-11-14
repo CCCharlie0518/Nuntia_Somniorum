@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v9.1.5';
+const APP_VERSION = 'v9.2.0';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -702,6 +702,8 @@ function defaultState() {
       taVoiceChance: 30,
       /* TA 发心情卡片概率：命中时本次回复改为一张心情卡片（随机 emoji/名称 + 1 张字卡作备注） */
       taMoodChance: 15,
+      /* TA 模仿说话概率：命中时直接借用我的高频词或口头禅回复 */
+      imitateChance: 10,
       /* TA的状态刷新时长（分钟）：0 表示不限制，默认 5 分钟 */
       statusRefreshCooldownMins: 5,
       mergeChance: 50,
@@ -1214,7 +1216,7 @@ function mergeState(saved) {
   if (!Array.isArray(out.pomodoro.records)) out.pomodoro.records = [];
 
   /* 概率参数校正，兼容旧版 / 手工编辑过的备份 */
-  ['replyChance', 'emojiSendChance', 'callChance', 'answerChance', 'spaceLikeChance', 'spaceCommentChance', 'redPacketClaimChance', 'taRedPacketChance', 'taGiftChance', 'autoSnapshotChance', 'pomodoroSpeakChance', 'taRecallChance', 'taQuoteChance', 'taVoiceChance', 'taMoodChance'].forEach(k => {
+  ['replyChance', 'emojiSendChance', 'callChance', 'answerChance', 'spaceLikeChance', 'spaceCommentChance', 'redPacketClaimChance', 'taRedPacketChance', 'taGiftChance', 'autoSnapshotChance', 'pomodoroSpeakChance', 'taRecallChance', 'taQuoteChance', 'taVoiceChance', 'taMoodChance', 'imitateChance'].forEach(k => {
     const v = Number(out.settings[k]);
     out.settings[k] = Number.isFinite(v) ? clamp(v, 0, 100) : d.settings[k];
   });
@@ -3084,7 +3086,7 @@ function renderChatPage(roleId) {
       <button data-kebab="pat">${APP_ICONS.pat}<span>拍一拍设置</span></button>
       <button data-kebab="probability">${APP_ICONS.probability}<span>概率与行为</span></button>
       <button data-kebab="stickers">${APP_ICONS.stickers}<span>表情包管理</span></button>
-      <button data-kebab="wordcloud">${APP_ICONS.wordcloud}<span>互动词云</span></button>
+      <button data-kebab="wordcloud">${APP_ICONS.wordcloud}<span>TA的观察室</span></button>
     </div>
     <div class="chat-search-layer" id="chat-search-layer">
       <div class="csch-bar">
@@ -5056,6 +5058,8 @@ function sendUserMessage(roleId, payload) {
     msg.quote = { id: chatQuote.id, who: chatQuote.who, text: chatQuote.text, mine: chatQuote.mine !== false };
   }
   chatOf(roleId).push(msg);
+  /* TA的观察室：只偷学主聊天里的用户文字，清洗后分类写入口头禅与摘抄 */
+  if ((!msg.type || msg.type === 'text') && msg.content) recordObservationText(msg.content);
   if (chatQuote && chatQuote.roleId === roleId) { chatQuote = null; renderQuoteBar(); }
   state.unread[roleId] = 0;
   jarOnChatActivity();  /* 拾光瓶：发送消息参与每日集星 / 断联复活 */
@@ -5498,6 +5502,13 @@ function processReplyQueue(roleId) {
   }
 
   typingMap.set(roleId, false);
+  /* 学人精回复：独立概率命中且有可借用内容时，直接发出一条文字，不抽字卡、不连发；
+     观察笔记为空时这里返回空串，自动降级为下面的正常字卡回复 */
+  const imitation = pickImitationReply();
+  if (imitation) {
+    taSendImitationReply(roleId, gen, imitation);
+    return;
+  }
   /* 连发：先按 replyChance 判定回复，命中后再决定本次回复形式 */
   /* TA 的表情包来源：只从「TA的表情包」（taStickers）抽取，绝不混用「我的表情包」 */
   const stickerPool = (state.taStickers || []).filter(s => s && s.data);
@@ -5516,6 +5527,21 @@ function processReplyQueue(roleId) {
     return;
   }
   taReplyWithCards(roleId, gen);
+}
+
+/* 学人精回复：固定发送单条纯文字，绕过字卡、拼接、连发、语音与心情卡片分支 */
+function taSendImitationReply(roleId, gen, text) {
+  typingMap.set(roleId, true);
+  chatSyncTyping(roleId);
+  refreshMessagesPage();
+  const fire = () => {
+    if (gen !== (chatGenMap.get(roleId) || 0)) { finishReplyStep(roleId); return; }
+    typingMap.set(roleId, false);
+    pushDreamMessage(roleId, { type: 'text', content: text, heartTags: makeHeartTags() });
+    finishReplyStep(roleId);
+  };
+  const delay = replyDelayMs();
+  if (delay > 0) setTimeout(fire, delay); else fire();
 }
 
 /* 普通字卡回复：连发 + 拼接，供普通回复与表情包回退共用 */
@@ -6415,8 +6441,8 @@ const APP_ICONS = {
   location: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><path d="m15.4 8.6-2 5-4.8 1.8 2-5Z"/></svg>',
   storage: '<svg viewBox="0 0 24 24"><ellipse cx="12" cy="6.4" rx="7.4" ry="2.8"/><path d="M4.6 6.4v11.2c0 1.6 3.3 2.8 7.4 2.8s7.4-1.2 7.4-2.8V6.4"/><path d="M4.6 12c0 1.6 3.3 2.8 7.4 2.8s7.4-1.2 7.4-2.8"/></svg>',
   probability: '<svg viewBox="0 0 24 24"><path d="M4.5 7h9M17.5 7h2M4.5 12h3M11.5 12h8M4.5 17h9M17.5 17h2"/><circle cx="15.5" cy="7" r="1.8"/><circle cx="9.5" cy="12" r="1.8"/><circle cx="15.5" cy="17" r="1.8"/></svg>',
-  /* 互动词云：线条风柱状统计图（尺寸、描边色、线宽统一由 .chat-kebab button svg 控制） */
-  wordcloud: '<svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
+  /* TA的观察室：index.html 中的专属线条风放大镜，彻底替换旧图标 */
+  wordcloud: ($('#observationIconTemplate') ? $('#observationIconTemplate').innerHTML : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>'),
   redpackets: '<svg viewBox="0 0 24 24"><path d="M4.5 8.6h12.6l-3.1-3.1M19.5 15.4H6.9l3.1 3.1"/></svg>',
   wallet: '<svg viewBox="0 0 24 24"><path d="M3.6 7.6A2.4 2.4 0 0 1 6 5.2h10.4a2.4 2.4 0 0 1 2.4 2.4v.8"/><rect x="3.6" y="7.6" width="16.8" height="11.2" rx="2.4"/><circle cx="16.4" cy="13.2" r="1.2"/></svg>',
   ledger: '<svg viewBox="0 0 24 24"><path d="M5 4.6h11.4A2.6 2.6 0 0 1 19 7.2v12.2H7.6A2.6 2.6 0 0 1 5 16.8Z"/><path d="M5 16.8h14M9 8.4h6"/></svg>',
@@ -12194,9 +12220,11 @@ const WC_STOP_WORDS = new Set([
  '因为', '所以', '但是', '如果', '时候', '现在', '一下', '这样', '那样', '不要']
   .forEach(w => WC_STOP_WORDS.add(w));
 
-/* 显示上限：统计阶段一律全量累加，只有传给 WordCloud 与排行榜时才截取前 10 名；
+/* 显示上限：统计阶段一律全量累加，只有传给 WordCloud 与排行榜时才截取；
  * 不设置任何「总字符 / 总消息条数 / 单条字数」预算，当前梦角的聊天记录会全部遍历 */
-const WC_TOP_N = 10;
+const WC_TOP_N = 10;        /* 底部高频词排行榜展示条数（原有行为不变） */
+const WC_RENDER_N = 30;     /* 词云最多渲染的高频词个数：按频次降序取前 30 */
+const WC_CHUNK_SIZE = 500;  /* 【全部】分片统计：每批处理 500 条后让出主线程 */
 
 /* 原生中文分词器（现代浏览器均支持）：用于把超过 6 字的长句拆成有意义的词。
  * 不可用时自动退化为 3 字一组切块，保证不会整句被丢弃 */
@@ -12366,26 +12394,105 @@ function wcCollectTexts(roleId, timeTab, whoTab) {
   const stats = { recalled: 0, nonText: 0, sender: 0, emptyText: 0, badTime: 0, ok: 0 };
   const texts = [];
 
+  /* 同步路径（今日 / 本周）：数据量小，直接一次遍历；过滤规则与分片路径共用 wcFilterText */
   allMessages.forEach(m => {
-    if (!m) return;
-    if (m.recalled) { stats.recalled++; return; }                 /* 已撤回的不统计 */
-    const type = m.type || 'text';
-    if (type !== 'text') { stats.nonText++; return; }              /* 图片/表情/转账/礼物/通话等非纯文字 */
-    if (wcMsgSender(m) !== wantSender) { stats.sender++; return; } /* 发送方不匹配 */
-    const text = wcMsgText(m);
-    if (!text) { stats.emptyText++; return; }                      /* 没有文本正文 */
-    if (!isAll) {
-      const ts = wcMsgTs(m);
-      /* 时间统一转成毫秒数字后再比较；允许 1 分钟时钟误差 */
-      if (!(ts > 0) || ts < start || ts > now + 60 * 1000) { stats.badTime++; return; }
-    }
-    stats.ok++;
-    texts.push(text);                                              /* 全量收集，不截断条数 */
+    const text = wcFilterText(m, wantSender, isAll, start, now, stats);
+    if (text) texts.push(text);                                    /* 全量收集，不截断条数 */
   });
 
   console.log("【词云排查】过滤明细:", stats);
   console.log("【词云排查】过滤后参与统计的有效文本数:", texts.length);
   return texts;
+}
+
+/* 单条消息过滤：命中返回正文，否则返回空串。stats 可选，用于排查计数；
+ * 今日 / 本周同步路径与【全部】分片路径共用这一套规则，保证统计口径完全一致 */
+function wcFilterText(m, wantSender, isAll, start, now, stats) {
+  if (!m) return '';
+  if (m.recalled) { if (stats) stats.recalled++; return ''; }                 /* 已撤回的不统计 */
+  const type = m.type || 'text';
+  if (type !== 'text') { if (stats) stats.nonText++; return ''; }              /* 图片/表情/转账等非纯文字 */
+  if (wcMsgSender(m) !== wantSender) { if (stats) stats.sender++; return ''; } /* 发送方不匹配 */
+  const text = wcMsgText(m);
+  if (!text) { if (stats) stats.emptyText++; return ''; }                      /* 没有文本正文 */
+  if (!isAll) {
+    const ts = wcMsgTs(m);
+    /* 时间统一转成毫秒数字后再比较；允许 1 分钟时钟误差 */
+    if (!(ts > 0) || ts < start || ts > now + 60 * 1000) { if (stats) stats.badTime++; return ''; }
+  }
+  if (stats) stats.ok++;
+  return text;
+}
+
+/* 定位梦角的完整消息数组：roleId 取不到时退回当前会话角色 */
+function wcRoleMessages(roleId) {
+  let rid = roleId;
+  if (!rid || !state.chats || !Array.isArray(state.chats[rid])) rid = state.activeRoleId;
+  const messages = (state.chats && Array.isArray(state.chats[rid])) ? state.chats[rid] : [];
+  return { rid, messages };
+}
+
+/* 分片处理：每批 chunkSize 条，批与批之间用 setTimeout 让出主线程，
+ * 浏览器可以正常渲染 Loading 与响应点击，不会因为万级遍历而假死。
+ * onChunk(list, from, to) 返回 false 表示立即中止（用户切了筛选 / 离开页面）。
+ * 返回 Promise<已处理条数>；全量遍历，绝不截断。 */
+function processInChunks(messages, chunkSize = 500, onChunk) {
+  return new Promise(resolve => {
+    const list = Array.isArray(messages) ? messages : [];
+    const size = Math.max(1, Math.floor(chunkSize) || 500);
+    let index = 0;
+    const step = () => {
+      if (index >= list.length) { resolve(index); return; }
+      const from = index;
+      const to = Math.min(from + size, list.length);
+      let aborted = false;
+      try {
+        if (typeof onChunk === 'function') aborted = onChunk(list, from, to) === false;
+      } catch (err) { aborted = false; }
+      index = to;
+      if (aborted) { resolve(index); return; }
+      if (index < list.length) setTimeout(step, 0); else resolve(index);
+    };
+    step();
+  });
+}
+
+/* 单条文本 → 词频累加：切分、分词、停用词过滤与 wcBuildList 完全同一套规则 */
+function wcAccumulateText(freq, text) {
+  String(text || '').split(WC_SPLIT_RE).forEach(piece => {
+    wcSplitFragment(piece).forEach(clean => {
+      if (wcIsStopWord(clean)) return;
+      freq[clean] = (freq[clean] || 0) + 1;
+    });
+  });
+}
+
+/* 词频对象 → [['词语', 频次], ...]，按频次降序（同频时长词优先），此处不截断 */
+function wcFreqToList(freq) {
+  return Object.keys(freq)
+    .map(w => [w, freq[w]])
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length);
+}
+
+/* 【全部】：分片异步统计全量历史记录，边遍历边累加词频，全程不截断任何一条消息 */
+function wcComputeAllChunked(roleId, whoTab, onProgress) {
+  const { messages } = wcRoleMessages(roleId);
+  const wantSender = whoTab === 'ta' ? 'ta' : 'user';
+  const freq = Object.create(null);
+  const stats = { recalled: 0, nonText: 0, sender: 0, emptyText: 0, badTime: 0, ok: 0 };
+  const total = messages.length;
+  const seq = wcRenderSeq;   /* 切筛选 / 离开页面时会自增，用于随时中止 */
+  return processInChunks(messages, WC_CHUNK_SIZE, (list, from, to) => {
+    if (seq !== wcRenderSeq) return false;
+    for (let i = from; i < to; i++) {
+      const text = wcFilterText(list[i], wantSender, true, 0, 0, stats);
+      if (text) wcAccumulateText(freq, text);
+    }
+    if (typeof onProgress === 'function') onProgress(to, total);
+  }).then(done => {
+    wcMergeRepeatWords(freq);
+    return { list: wcFreqToList(freq), ok: stats.ok, total, handled: done };
+  });
 }
 
 /* 叠词折叠键：把连续重复的字压成一个（好好好→好、开开心心→开心），
@@ -12429,24 +12536,13 @@ function wcMergeRepeatWords(freq) {
 function wcBuildList(texts) {
   const freq = Object.create(null);
 
-  texts.forEach(t => {
-    let raw = String(t || '');
-    /* 空格、换行、制表符、全部中英文标点与特殊符号一律作为分割线 */
-    raw.split(WC_SPLIT_RE).forEach(piece => {
-      wcSplitFragment(piece).forEach(clean => {
-        if (wcIsStopWord(clean)) return;                       /* 只按停用词表过滤 */
-        freq[clean] = (freq[clean] || 0) + 1;                  /* 全量累加，不设词数上限 */
-      });
-    });
-  });
+  (Array.isArray(texts) ? texts : []).forEach(t => wcAccumulateText(freq, t));
 
   /* 强制合并「好好 / 好好好」这类重复写法，以完整词为准累加频次 */
   wcMergeRepeatWords(freq);
 
   /* 转为数组后按频次降序排序（同频时长词优先），此处不截断 */
-  return Object.keys(freq)
-    .map(w => [w, freq[w]])
-    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length);
+  return wcFreqToList(freq);
 }
 
 /* 渲染前数据清洗（词云库与排行榜共用）：
@@ -12468,14 +12564,14 @@ function wcSanitizeList(list) {
 
 /* 切换筛选时的过渡态：立刻清空旧画布并显示「正在统计…」，
  * 让点击反馈瞬间可见，真正的计算与重绘放到下一个任务里执行 */
-function wcShowLoading() {
+function wcShowLoading(text) {
   const canvas = $('#wordcloud-canvas');
   if (canvas) {
     canvas.style.display = 'block';
     try { canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height); } catch (err) { /* 忽略 */ }
   }
   const emptyEl = $('#wcEmpty');
-  if (emptyEl) { emptyEl.textContent = '正在统计…'; emptyEl.classList.remove('hidden'); }
+  if (emptyEl) { emptyEl.textContent = text || '正在统计…'; emptyEl.classList.remove('hidden'); }
   const rankEl = $('#wcRank');
   if (rankEl) { rankEl.classList.add('hidden'); rankEl.innerHTML = ''; }
 }
@@ -12512,7 +12608,129 @@ function wcCleanup() {
   }
 }
 
-/* 词云页：返回键 + 标题 + 双筛选标签 + canvas 容器 */
+/* ===== TA的观察笔记：localStorage 独立保存，避免聊天持久化失败时弄丢记录 ===== */
+const OBSERVATION_STORAGE_KEY = 'ta-observation-notes-v1';
+const OBSERVATION_INVALID_RE = /^(?:嗯+|啊+|哦+|噢+|额+|呃+|唉+|哎+|哼+|哈+|呵+|嘿+|嘻+|唔+)$/;
+/* 观察笔记单次渲染的节点上限：存储仍各留 30 条，只限制 DOM 数量 */
+const OBS_TAG_RENDER_MAX = 20;    /* 口头禅胶囊最多渲染 20 个 */
+const OBS_QUOTE_RENDER_MAX = 15;  /* 长句列表最多渲染 15 条 */
+
+/* 去掉标点、空白、换行与 emoji，只保留文字和数字；纯表情清洗后自然变成空串 */
+function cleanObservationText(text) {
+  return String(text == null ? '' : text).normalize('NFKC').replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+function readObservationNotes() {
+  let raw = null;
+  try { raw = JSON.parse(localStorage.getItem(OBSERVATION_STORAGE_KEY) || 'null'); } catch (err) { raw = null; }
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const cleanList = (list, min, max) => {
+    const out = [];
+    (Array.isArray(list) ? list : []).forEach(item => {
+      if (typeof item !== 'string') return;
+      const text = item.trim();
+      const len = Array.from(text).length;
+      if (len >= min && len <= max && !out.includes(text)) out.push(text);
+    });
+    return out.slice(0, 30);
+  };
+  return {
+    catchphrases: cleanList(source.catchphrases, 2, 6),
+    quotes: cleanList(source.quotes, 7, Infinity)
+  };
+}
+
+/* 主聊天发送入口调用：2~6 字记为口头禅，超过 6 字记为摘抄；去重且各留最新 30 条 */
+function recordObservationText(text) {
+  const clean = cleanObservationText(text);
+  const len = Array.from(clean).length;
+  if (len < 2 || OBSERVATION_INVALID_RE.test(clean)) return;
+  const notes = readObservationNotes();
+  const key = len <= 6 ? 'catchphrases' : 'quotes';
+  if (notes[key].includes(clean)) return;
+  notes[key].unshift(clean);
+  notes[key] = notes[key].slice(0, 30);
+  try { localStorage.setItem(OBSERVATION_STORAGE_KEY, JSON.stringify(notes)); } catch (err) { /* 存储不可用时仅跳过本次记录 */ }
+}
+
+/* 词条右侧的删除小叉：kind = catchphrases / quotes，idx 为当前渲染数组下标 */
+function observationDelBtnHTML(kind, idx, label) {
+  return `<button type="button" class="observation-del" data-obs-kind="${kind}" data-obs-idx="${idx}" aria-label="删除${esc(label)}">×</button>`;
+}
+
+function renderObservationNotes() {
+  const root = $('#observationNotes');
+  if (!root) return;
+  const notes = readObservationNotes();
+  const hasNotes = notes.catchphrases.length || notes.quotes.length;
+  /* 只渲染有限条数，避免几十个节点把页面撑长、拖慢滚动；数据本身仍完整保留 */
+  const tags = notes.catchphrases.slice(0, OBS_TAG_RENDER_MAX);
+  const quotes = notes.quotes.slice(0, OBS_QUOTE_RENDER_MAX);
+  const content = hasNotes ? `
+    <div class="observation-note-block">
+      <div class="observation-note-label">你的口头禅</div>
+      ${tags.length
+        ? `<div class="observation-tags">${tags.map((text, i) => `<span class="observation-tag">${esc(text)}${observationDelBtnHTML('catchphrases', i, '这句口头禅')}</span>`).join('')}</div>`
+        : '<div class="observation-mini-empty">还没有偷学到口头禅</div>'}
+    </div>
+    <div class="observation-note-block">
+      <div class="observation-note-label">你爱说的话</div>
+      ${quotes.length
+        ? `<ul class="observation-quotes">${quotes.map((text, i) => `<li class="observation-quote"><span class="observation-quote-text">${esc(text)}</span>${observationDelBtnHTML('quotes', i, '这句话')}</li>`).join('')}</ul>`
+        : '<div class="observation-mini-empty">还没有偷学到长句子</div>'}
+    </div>` : '<div class="observation-empty">他还在默默观察你……</div>';
+  root.innerHTML = `
+    <h2 class="observation-notes-title">TA偷偷记下的你</h2>
+    ${content}
+    <div class="observation-aside">他其实都记在心里了，连你说话的语气都偷偷学了去。</div>`;
+  /* 删除按钮用事件委托，只绑一次；后续重渲染 innerHTML 不会丢监听、也不会重复叠加 */
+  if (!root.dataset.delBound) {
+    root.dataset.delBound = '1';
+    root.addEventListener('click', onObservationDeleteClick);
+  }
+}
+
+/* 点击删除叉：拦住冒泡，弹一次轻确认，确认后按文字精确剔除并只重绘笔记区域 */
+function onObservationDeleteClick(e) {
+  const btn = e.target.closest('[data-obs-kind]');
+  if (!btn) return;
+  e.stopPropagation();
+  e.preventDefault();
+  const kind = btn.dataset.obsKind === 'quotes' ? 'quotes' : 'catchphrases';
+  const idx = Number(btn.dataset.obsIdx);
+  const text = readObservationNotes()[kind][idx];
+  if (text === undefined) return;
+  confirmDialog('确定要让他忘掉吗？', `确定要让他忘掉「${text}」吗？`, '忘掉', true).then(ok => {
+    if (ok) removeObservationEntry(kind, text);
+  });
+}
+
+/* 按内容过滤而不是按下标删除：即使期间有新记录写入，也只会移除点中的那一条 */
+function removeObservationEntry(kind, text) {
+  const notes = readObservationNotes();
+  const next = notes[kind].filter(item => item !== text);
+  if (next.length === notes[kind].length) return;
+  notes[kind] = next;
+  try { localStorage.setItem(OBSERVATION_STORAGE_KEY, JSON.stringify(notes)); } catch (err) { /* 存储不可用时仅跳过持久化 */ }
+  renderObservationNotes();
+  showToast('已让他忘记这句话');
+}
+
+/* 模仿回复：只在【观察笔记】里抽取，词云数据完全不参与。
+ * 命中概率后 50% 抽长句、50% 抽口头禅；所选数组为空则交叉兜底；
+ * 两个数组都为空（或概率为 0）返回空串，由调用方降级为正常字卡回复。 */
+function pickImitationReply() {
+  const chance = clamp(Number(state.settings.imitateChance ?? 10), 0, 100);
+  if (!(chance > 0) || Math.random() * 100 >= chance) return '';
+  const notes = readObservationNotes();
+  const preferQuotes = Math.random() < 0.5;
+  const first = preferQuotes ? notes.quotes : notes.catchphrases;
+  const second = preferQuotes ? notes.catchphrases : notes.quotes;
+  const pool = first.length ? first : second;
+  return pool.length ? pickOne(pool) : '';
+}
+
+/* 观察室：筛选区 + 原词云与排行榜 + 底部观察笔记 */
 function renderWordCloudPage() {
   /* 每次从快捷菜单进入都恢复默认筛选：本周 + TA说的 */
   wcTimeTab = 'week';
@@ -12524,7 +12742,7 @@ function renderWordCloudPage() {
   wcLastKey = '';   /* 每次进入都允许重绘一次；此后滚动 / 缩放绝不会再触发排版 */
   const roleId = wcRoleId;
   const dn = taName(roleId);
-  const body = subShell('互动词云', `
+  const body = subShell('TA的观察室', `
     <div class="wc-tabs">
       <button class="wc-tab ${wcTimeTab === 'today' ? 'active' : ''}" data-wctime="today">今日</button>
       <button class="wc-tab ${wcTimeTab === 'week' ? 'active' : ''}" data-wctime="week">本周</button>
@@ -12540,7 +12758,9 @@ function renderWordCloudPage() {
     </div>
     <div class="wc-rank hidden" id="wcRank"></div>
     <div class="wc-tip muted">统计与 ${esc(dn)} 的聊天文字内容，已自动过滤标点与常用虚词</div>
+    <section class="observation-notes" id="observationNotes"></section>
   `);
+  renderObservationNotes();
   $$('[data-wctime]', body).forEach(btn => btn.addEventListener('click', () => {
     if (wcTimeTab === btn.dataset.wctime) return;
     wcTimeTab = btn.dataset.wctime;
@@ -12564,7 +12784,8 @@ function renderWordCloudPage() {
 
 /* 取数 → 统计 → 调用 wordcloud2.js 绘制。
  * 全模块只有这一个排版入口，并且带「角色 + 筛选」指纹去重：
- * 同一筛选成功画过之后直接返回，滚动 / resize 永远不会再触发重新计算。 */
+ * 同一筛选成功画过之后直接返回，滚动 / resize 永远不会再触发重新计算。
+ * 【全部】走分片异步统计（每 500 条让出主线程），今日 / 本周数据量小走同步计算。 */
 function drawWordCloud() {
   const canvas = $('#wordcloud-canvas');
   if (!canvas || !canvas.isConnected) return;
@@ -12573,8 +12794,63 @@ function drawWordCloud() {
   const key = (wcRoleId || state.activeRoleId || '') + '|' + wcTimeTab + '|' + wcWhoTab;
   if (key === wcLastKey) return;
 
+  const roleId = wcRoleId || state.activeRoleId;
+  const dn = taName(roleId);
+
+  /* ① 库兜底：wordcloud2.js 未加载成功时给出友好提示 */
+  if (typeof WordCloud !== 'function') {
+    wcShowLoading('词云组件加载失败，请检查网络后重新进入');
+    return;
+  }
+
+  /* ② 【全部】：先显示 Loading，再分片异步遍历全部历史记录，边遍历边累加词频 */
+  if (wcTimeTab === 'all') {
+    wcShowLoading('正在翻阅所有回忆...');
+    const seq = wcRenderSeq;
+    wcComputeAllChunked(roleId, wcWhoTab, (done, total) => {
+      /* 每批结束后刷新进度文字，让用户看到任务在推进，而不是卡死 */
+      const emptyEl = $('#wcEmpty');
+      if (emptyEl) emptyEl.textContent = '正在翻阅所有回忆... ' + done + '/' + total;
+    }).then(result => {
+      if (seq !== wcRenderSeq) return;        /* 期间切了筛选 / 离开页面，本次结果作废 */
+      if (!canvas.isConnected) return;
+      wcSchedulePaint(key, wcSanitizeList(result.list), dn, wcEmptyMessage(dn, result.ok));
+    });
+    return;
+  }
+
+  /* ③ 【今日】/【本周】：数据量小，直接同步统计，不分片 */
+  const texts = wcCollectTexts(roleId, wcTimeTab, wcWhoTab);
+  const fullList = wcSanitizeList(wcBuildList(texts));
+  wcSchedulePaint(key, fullList, dn, wcEmptyMessage(dn, texts.length));
+}
+
+/* 空状态文案：区分「没有可统计的文字」与「文字太少提不出关键词」 */
+function wcEmptyMessage(dn, validCount) {
+  const scope = wcTimeTab === 'all' ? '全部聊天记录' : '这段时间';
+  return validCount
+    ? scope + '的文字内容太少，暂时提取不出关键词，再多聊几句试试'
+    : scope + '还没有可统计的聊天文字，先去和 ' + dn + ' 说说话吧';
+}
+
+/* 统计完成后延后 50ms 再排版：让浏览器先消化完统计结果，
+ * 再把 WordCloud 绘制与排行榜 DOM 更新放到独立任务里执行 */
+function wcSchedulePaint(key, fullList, dn, emptyMsg) {
+  const seq = wcRenderSeq;
+  if (wcTimer) { clearTimeout(wcTimer); wcTimer = null; }
+  wcTimer = setTimeout(() => {
+    wcTimer = null;
+    if (seq !== wcRenderSeq) return;
+    paintWordCloud(key, fullList, emptyMsg);
+  }, 50);
+}
+
+/* 真正排版：词云渲染前 30 个高频词，底部排行榜沿用原有前 10 名 */
+function paintWordCloud(key, fullList, emptyMsg) {
+  const canvas = $('#wordcloud-canvas');
+  if (!canvas || !canvas.isConnected) return;
+
   const emptyEl = $('#wcEmpty');
-  const dn = taName(wcRoleId || state.activeRoleId);
   const rankEl = $('#wcRank');
   const showEmpty = msg => {
     canvas.style.display = 'none';
@@ -12582,50 +12858,30 @@ function drawWordCloud() {
     if (rankEl) { rankEl.classList.add('hidden'); rankEl.innerHTML = ''; }
   };
 
-  /* 有数据时的显隐切换：先恢复可见，再量尺寸，最后绘制 */
-  const showCanvas = () => {
-    canvas.style.display = 'block';
-    if (emptyEl) emptyEl.classList.add('hidden');
-  };
+  if (!fullList.length) { showEmpty(emptyMsg); return; }
 
-  /* ① 库兜底：wordcloud2.js 未加载成功时给出友好提示 */
-  if (typeof WordCloud !== 'function') {
-    showEmpty('词云组件加载失败，请检查网络后重新进入');
-    return;
-  }
+  /* ④ 截取前 30 个高频词交给词云；排行榜只取前 10，保持原有展示 */
+  const cloudList = fullList.slice(0, WC_RENDER_N);
+  const rankList = cloudList.slice(0, WC_TOP_N);
 
-  /* ② 取数 + 全量词频统计 → 严格清洗成 [['词语', 频次], ...] 完整列表（此阶段不截断） */
-  const texts = wcCollectTexts(wcRoleId || state.activeRoleId, wcTimeTab, wcWhoTab);
-  const fullList = wcSanitizeList(wcBuildList(texts));
-  if (!fullList.length) {
-    const scope = wcTimeTab === 'all' ? '全部聊天记录' : '这段时间';
-    showEmpty(texts.length
-      ? scope + '的文字内容太少，暂时提取不出关键词，再多聊几句试试'
-      : scope + '还没有可统计的聊天文字，先去和 ' + dn + ' 说说话吧');
-    return;
-  }
-
-  /* ③ 只有最终渲染才截取前 10 名：词云与排行榜共用同一份 Top 10，统计结果本身是完整的 */
-  const list = fullList.slice(0, WC_TOP_N);
-
-  /* ④ 渲染前保证 canvas 可见（隐藏时宽高为 0，画出来会是空白） */
-  showCanvas();
+  /* ⑤ 渲染前保证 canvas 可见（隐藏时宽高为 0，画出来会是空白） */
+  canvas.style.display = 'block';
+  if (emptyEl) emptyEl.classList.add('hidden');
   /* 布局尚未完成（宽高为 0）时直接中止，避免词云库在内部空转 */
   if (!canvas.offsetWidth || !canvas.offsetHeight) {
     showEmpty('页面布局还没有准备好，请稍后再进入词云看看');
     return;
   }
 
-  /* ⑤ 动态字号区间：取 Top 10 里的最大 / 最小频次，映射到 15px ~ 40px。
+  /* ⑥ 动态字号区间：取前 30 名里的最大 / 最小频次，映射到 15px ~ 40px。
    * 上限压到 40px：字太大时碰撞网格要反复回退重排，是排版算法变慢的主因。 */
-  const maxCount = list[0][1];
-  const minCount = list[list.length - 1][1];
+  const maxCount = cloudList[0][1];
+  const minCount = cloudList[cloudList.length - 1][1];
 
-  /* 底部排行榜：与词云共用同一份 Top 10 数组 */
+  /* 底部排行榜：与词云共用同一份统计结果的前 10 名 */
   if (rankEl) {
-    const top = list;
-    rankEl.innerHTML = `<div class="wc-rank-title">高频词 TOP ${top.length}</div>`
-      + top.map(([w, n], i) => `<div class="wc-rank-row">
+    rankEl.innerHTML = `<div class="wc-rank-title">高频词 TOP ${rankList.length}</div>`
+      + rankList.map(([w, n], i) => `<div class="wc-rank-row">
           <span class="wc-rank-no">${i + 1}</span>
           <span class="wc-rank-word">${esc(w)}</span>
           <span class="wc-rank-count">${n} 次</span>
@@ -12633,7 +12889,7 @@ function drawWordCloud() {
     rankEl.classList.remove('hidden');
   }
 
-  /* ⑥ 限制绘制精度：backing store 固定为 CSS 像素（1x），不跟随高 DPR 手机放大。
+  /* ⑦ 限制绘制精度：backing store 固定为 CSS 像素（1x），不跟随高 DPR 手机放大。
    * wordcloud2 直接用 canvas.width/height 作为碰撞网格坐标系，尺寸翻倍会让排版耗时成倍增长；
    * 同时重设 width/height 本身就会清空画布，再显式 clearRect 一次，杜绝旧图叠新图。 */
   const cssW = Math.round(canvas.getBoundingClientRect().width) || 300;
@@ -12644,7 +12900,7 @@ function drawWordCloud() {
 
   try {
     WordCloud(canvas, {
-      list,
+      list: cloudList,
       gridSize: 18,            /* 网格从 10 放大到 18：碰撞检测格子更少，排版明显更快 */
       weightFactor: function (count) {
         /* 频次全相同就没有区间可言，统一给中间大字号 */
@@ -17930,6 +18186,7 @@ function renderProbabilityPage() {
       ${sliderRowHTML(`${dn}引用消息概率`, `${dn} 回复时按该概率引用你之前的一条消息`, 'taQuoteChance', s.taQuoteChance, 0, 100, '%')}
       ${sliderRowHTML(`${dn}发语音概率`, `命中时${dn}把本次字卡文字转成语音气泡（3~10 秒），点气泡可展开文字`, 'taVoiceChance', s.taVoiceChance, 0, 100, '%')}
       ${sliderRowHTML(`${dn}发心情卡片概率`, `命中时${dn}本次回复改为一张心情卡片：从 30 种预设里随机抽 emoji + 情绪，并附 1 张字卡作备注`, 'taMoodChance', s.taMoodChance, 0, 100, '%')}
+      ${sliderRowHTML('TA模仿说话概率', '当触发时，TA 会用你平时常说的口头禅来回复你。', 'imitateChance', s.imitateChance, 0, 100, '%')}
     </div>
     <div class="panel" id="section-call">
       <div class="panel-title">语音来电</div>
@@ -18030,6 +18287,7 @@ function renderProbabilityPage() {
   bindProbSlider('taVoiceChance', 'taVoiceChanceRange', 'taVoiceChanceNum', 0, 100);
   /* TA 发心情卡片概率：同样实时写回 settings.taMoodChance 并立即保存 */
   bindProbSlider('taMoodChance', 'taMoodChanceRange', 'taMoodChanceNum', 0, 100);
+  bindProbSlider('imitateChance', 'imitateChanceRange', 'imitateChanceNum', 0, 100);
   bindProbSlider('statusRefreshCooldownMins', 'statusRefreshCooldownMinsRange', 'statusRefreshCooldownMinsNum', 0, 1440);
   bindProbSlider('mergeChance', 'mergeChanceRange', 'mergeChanceNum', 0, 100);
   bindProbSlider('mergeMin', 'mergeMinRange', 'mergeMinNum', 2, 6);
