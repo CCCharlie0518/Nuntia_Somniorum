@@ -8929,6 +8929,7 @@ let csTab = 'font';                        /* 当前分类：font / bubble */
  * 现在改为两个完全独立的变量 + 两个独立的 localStorage 键，读写永远只认分类。 */
 let currentFontCSS = '';
 let currentBubbleCSS = '';
+let csPendingLocalFontCSS = '';   /* 本地字体生成的完整 CSS：上传后原样优先，绝不进链接识别 */
 const CS_LS_KEY_FONT = 'savedFontCSS';
 const CS_LS_KEY_BUBBLE = 'savedBubbleCSS';
 
@@ -9651,9 +9652,14 @@ function csSwitchTab(mode) {
 function csApplyCurrent() {
   /* 只读取“当前分类”自己的草稿，另一个分类的代码绝不会被顺手带进来 */
   const raw = String(csGetDraft(csTab) || '').trim();
-  const css = csBuildCSS(raw, csTab);
+  /* 本地字体通道：草稿与刚上传生成的代码完全一致时直接应用，
+     不经过任何链接正则 / 资源探测，避免本地 Base64 被误判成无效链接 */
+  const isLocalFont = csTab === 'font' && !!csPendingLocalFontCSS && raw === csPendingLocalFontCSS.trim();
+  const css = isLocalFont ? csPendingLocalFontCSS : csBuildCSS(raw, csTab);
+  /* 用户改了输入框（换链接 / 换代码）→ 本地字体标记失效，后续按常规解析 */
+  if (!isLocalFont && raw) csPendingLocalFontCSS = '';
   /* 字体分类里写了内容却解析不出 CSS：多半是既没有字体链接、也不是合法属性，提示而不是静默清空 */
-  if (raw && !css && csTab !== 'bubble') {
+  if (!isLocalFont && raw && !css && csTab !== 'bubble') {
     csSetStatus('error', '❌ 未在输入内容中识别到有效的字体链接');
     showToast('未在输入内容中识别到有效的字体链接');
     return;
@@ -9874,6 +9880,25 @@ async function csRemoveFont() {
   showToast('字体已彻底删除，空间已释放');
 }
 
+/* 本地字体 → 可直接注入的完整 CSS：@font-face（Base64 内联）+ 全站生效规则。
+ * 这条路径只处理已经读进内存的 dataURL，绝不把内容送进链接正则，避免被误判成无效链接 */
+function csLocalFontCSS(dataURL, fileName) {
+  return csFontFace(dataURL, csFontFormat(fileName), 'LocalCustomFont') + '\n' +
+    `${CS_FONT_SELECTOR} { font-family: 'LocalCustomFont', -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif !important; }`;
+}
+
+/* 本地字体直接注入：上传即生效，不经过 csBuildCSS / 资源探测 / 链接识别任何一环 */
+function csApplyLocalFont(css) {
+  const cs = state.beautify.customStyle;
+  cs.applied.font = css;
+  cs.tab = 'font';
+  persist();
+  customStyleMirror();
+  csApplyInlineDeferred();   /* 内部对超大 Base64 已做异步注入 */
+  csUpdatePreview();
+  csSetStatus('ok', '✅ 本地字体已成功应用');
+}
+
 function csReadFontFile(file) {
   if (!file) return;
   /* 格式粗筛：扩展名或 font/* MIME 至少要过一个，明显不对的文件直接提示 */
@@ -9886,20 +9911,23 @@ function csReadFontFile(file) {
   csFontLoading(true);
   const reader = new FileReader();
   reader.onload = () => {
-    /* 异步落地：Base64 字符串可达几十 MB，生成代码与写输入框放到下一轮事件循环，防止阻塞主线程 */
+    /* 异步落地：Base64 字符串可达几十 MB，生成代码与注入放到下一轮事件循环，防止阻塞主线程 */
     setTimeout(() => {
       try {
         const data = String(reader.result || '');
         if (!data || data.indexOf('data:') !== 0) throw new Error('bad font data');
         csLastFontData = data;
         if (csTab !== 'font') csSwitchTab('font');
-        csSetDraft('font', csFontFace(data, csFontFormat(file.name), 'CustomFont') + '\n' +
-          `${CS_FONT_SELECTOR} { font-family: 'CustomFont', -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif !important; }`);
+        const css = csLocalFontCSS(data, file.name);
+        /* 记下这段本地字体代码：后续点【应用到全局】时原样优先使用，不再走链接识别 */
+        csPendingLocalFontCSS = css;
+        csSetDraft('font', css);
         const input = $('#csInput');
-        if (input) input.value = csGetDraft('font');
+        if (input) input.value = css;
         csUpdateFontDeleteBtn();   /* 上传成功 → 显示【删除字体】 */
-        csUpdatePreview();   /* 内部对超大文本已做异步注入 */
-        showToast('字体已载入，点【应用到全局】生效');
+        /* 读取成功立刻注入，不需要用户再点一次【应用到全局】 */
+        csApplyLocalFont(css);
+        showToast('本地字体已成功应用');
       } catch (e) {
         showToast('字体解析失败，请检查文件格式');
       } finally {
