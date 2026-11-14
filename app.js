@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v9.2.2';
+const APP_VERSION = 'v9.2.3';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -1970,13 +1970,13 @@ function showToast(text) {
 }
 
 function showModal(opt) {
-  const { title = '', titleRight = null, body = '', actions = [], wide = false, onMount = null } = opt || {};
+  const { title = '', body = '', actions = [], wide = false, onMount = null } = opt || {};
   const root = $('#modalRoot');
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal${wide ? ' wide' : ''}">
-      ${title ? `<div class="modal-title${titleRight ? ' has-right' : ''}">${esc(title)}${titleRight ? `<button class="modal-title-action" type="button">${esc(titleRight.label || '')}</button>` : ''}</div>` : ''}
+      ${title ? `<div class="modal-title">${esc(title)}</div>` : ''}
       <div class="modal-body">${body}</div>
       ${actions.length ? `<div class="modal-actions">${actions.map((a, i) =>
         `<button class="mbtn ${a.kind || ''}" data-mi="${i}">${esc(a.label)}</button>`).join('')}</div>` : ''}
@@ -2006,11 +2006,6 @@ function showModal(opt) {
     });
   });
   if (typeof onMount === 'function') onMount(overlay, close);
-  /* 标题右侧的次级操作按钮（如「查看历史心情」） */
-  if (titleRight && typeof titleRight.onClick === 'function') {
-    const trBtn = $('.modal-title-action', overlay);
-    if (trBtn) trBtn.addEventListener('click', () => titleRight.onClick(overlay, close));
-  }
   requestAnimationFrame(() => overlay.classList.add('show'));
   return { el: overlay, close };
 }
@@ -3444,11 +3439,6 @@ function openMoodComposer(roleId) {
   if (!roleById(roleId)) return;
   const modal = showModal({
     title: '记录心情',
-    /* 标题右侧的历史入口：先关弹窗，再跳二级页并渲染心情历史 */
-    titleRight: {
-      label: '查看历史心情',
-      onClick: (overlay, close) => { close(); navigate({ page: 'sub', name: 'mood-history' }); }
-    },
     body: `
       <div class="mood-presets">
         ${taMoodPresets.map(p => `<button class="mood-preset" data-moodname="${esc(p.name)}" data-moodemoji="${p.emoji}"><span class="me">${p.emoji}</span>${esc(p.name)}</button>`).join('')}
@@ -3499,28 +3489,6 @@ function moodCardHTML(m, quoteHTML = '') {
     <div class="mood-main"><span class="mood-emoji">${emoji}</span><span class="mood-name">${name}</span></div>
     ${reason ? `<div class="mood-reason">${esc(reason)}</div>` : ''}
   </div>`;
-}
-
-/* YYYY-MM-DD HH:mm（心情历史专用格式） */
-function fmtFullTime(ts) {
-  const d = new Date(ts);
-  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
-    + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
-}
-
-/* 心情历史：倒序列出当前梦角的全部心情卡片（时间在上、卡片在下） */
-function renderMoodHistoryPage() {
-  const roleId = state.activeRoleId;
-  const moods = (roleId ? chatOf(roleId) : [])
-    .filter(m => m && m.type === 'mood' && !m.recalled)
-    .sort((a, b) => (b.ts || 0) - (a.ts || 0));
-  return subShell('心情历史', moods.length
-    ? `<div class="mood-history-list" id="mood-history-list">${moods.map(m => `
-        <div class="mh-item">
-          <div class="mh-time">${fmtFullTime(m.ts)}</div>
-          ${moodCardHTML(m)}
-        </div>`).join('')}</div>`
-    : `<div class="empty-hint">还没有记录过心情<br>在聊天页「＋」里点【记录心情】试试</div>`);
 }
 
 /* 聊天页“+”面板 / 留影选择模式 */
@@ -9318,34 +9286,85 @@ function csScopeToChat(css) {
   return imports.concat(out).join('\n');
 }
 
-/* 智能解析：纯链接 → @font-face / @import；带大括号的完整 CSS → 原样注入（只补 !important）；
-   纯属性 → 自动包裹该分类的精准选择器（气泡 .msg .bubble / 字体全站选择器）。
+/* 从任意文本中提取第一个字体直链。正则刻意放宽：
+ * - 大写后缀（.TTF / .Woff2）靠 i 标记兼容；
+ * - 带 ?v=1&x=2 之类的查询参数；
+ * - 链接前后夹着说明文字、中文、空格、引号都能抠出来；
+ * - 贪婪匹配 + 回溯到 .ttf/.woff/.woff2/.otf 结尾，自动忽略链接后面的标点。
+ * - 后缀必须按长度倒序写（woff2 在 woff 前），否则 .woff2 会被截成 .woff。
+ * 返回空串表示没识别到合法字体链接。 */
+const CS_FONT_URL_RE = /(https?:\/\/[^\s]+\.(?:woff2|woff|ttf|otf)(?:\?[^\s]*)?)/i;
+
+function csFontUrlOf(text) {
+  const m = String(text == null ? '' : text).match(CS_FONT_URL_RE);
+  return m ? m[1] : '';
+}
+
+/* 输入是否像「纯 CSS 属性」：每一行都必须是 属性: 值 的形式（支持多行、结尾分号可选） */
+function csLooksLikeDeclarations(text) {
+  const lines = String(text || '').split(/[\r\n;]+/).map(s => s.trim()).filter(Boolean);
+  if (!lines.length) return false;
+  return lines.every(line => /^[-a-zA-Z]+\s*:\s*\S/.test(line));
+}
+
+/* 字体是否真的加载成功只在控制台提示：
+ * 图床跨域 / 防盗链会让 @font-face 静默失效，UI 仍按「解析成功」处理，
+ * 避免用户被前端告警打断，排查时看控制台即可。 */
+function csWarnIfFontNotLoaded(css) {
+  const m = String(css || '').match(/@font-face[\s\S]*?font-family\s*:\s*['"]?([^'";}]+)['"]?/i);
+  if (!m || !document.fonts || typeof document.fonts.load !== 'function') return;
+  const family = m[1].trim();
+  let settled = false;
+  const timer = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    console.warn('[样式自定义] 字体 "' + family + '" 在 6 秒内未加载完成，可能是图床限制跨域（CORS）或链接失效；界面仍按解析成功处理。');
+  }, 6000);
+  document.fonts.load('16px "' + family + '"').then(faces => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    if (!faces || !faces.length) {
+      console.warn('[样式自定义] 字体 "' + family + '" 未返回可用字形，可能是图床限制跨域（CORS）或文件损坏；界面仍按解析成功处理。');
+    }
+  }).catch(err => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    console.warn('[样式自定义] 字体 "' + family + '" 加载失败（可能被图床跨域限制）：', err);
+  });
+}
+
+/* 智能解析：字体直链 → @font-face + 全站生效规则；其它链接 → @import；
+   带大括号的完整 CSS → 原样注入（只补 !important）；
+   纯属性 → 自动包裹该分类的精准选择器（字体 CS_FONT_SELECTOR / 气泡 .msg .bubble）。
    注意：这里不做作用域；全局注入入口 applyCustomStyleInline 只对气泡代码套 #page-chat，
    字体代码保持全站生效。 */
 function csBuildCSS(raw, tab) {
   const text = String(raw == null ? '' : raw).trim();
   if (!text) return '';
 
-  /* 1) 链接：整段只有一个 URL 时才按链接处理，避免把含 http 的代码误判 */
-  if (/^https?:\/\//i.test(text) && !/\s/.test(text)) {
-    const clean = text.split('?')[0].split('#')[0].toLowerCase();
-    /* 字体直链（.ttf / .woff / .woff2 / .otf）→ @font-face + 生效选择器 */
-    if (/\.(ttf|otf|woff2|woff|eot)$/.test(clean)) return csFontLinkCSS(text);
-    /* CSS 文件 / 其它链接 → 按样式表导入（@import 不能加 !important） */
-    return `@import url('${text}');`;
-  }
-
-  /* 2) 含大括号（或 @ 规则）→ 原封不动地直接注入，只补 !important 提升权重，绝不包裹；
-     若只写了旧类名 .message-*，再追加一份命中真实聊天 DOM 的别名规则 */
+  /* 1) 完整 CSS（含大括号或 @ 规则）→ 原样注入。
+     必须排在链接识别之前，否则 @font-face 里的 .ttf 会被当成「纯链接」重建，覆盖用户的字体名 */
   if (/\{/.test(text) || /^@/.test(text)) {
     const base = csForceImportant(text);
-    const alias = csAliasBubbleCss(base);
+    const alias = tab === 'bubble' ? csAliasBubbleCss(base) : '';
     return alias ? base + '\n\n' + alias : base;
   }
 
-  /* 3) 纯属性：自动包裹该分类的精准选择器
-     字体：直接用全站选择器（含输入框/按钮），因为字体不再锁 #page-chat 而需全站生效；
-     气泡：仍用 .msg .bubble，注入时再锁 #page-chat，绝不污染系统浮层 */
+  /* 2) 从任意文本里提取第一个字体直链（大写后缀 / 带参数 / 混在说明文字里都可以） */
+  const fontUrl = csFontUrlOf(text);
+  if (fontUrl) return csFontLinkCSS(fontUrl);
+
+  /* 3) 其它链接：整段只有一个 URL 时按样式表导入（@import 不能加 !important） */
+  if (/^https?:\/\//i.test(text) && !/\s/.test(text)) {
+    return `@import url('${text}');`;
+  }
+
+  /* 4) 纯属性：自动包裹该分类的精准选择器。
+     字体分类里既不是 CSS 属性、也没有字体链接的纯文字，返回空串，
+     由调用方提示「未在输入内容中识别到有效的字体链接」 */
+  if (tab !== 'bubble' && !csLooksLikeDeclarations(text)) return '';
   const target = tab === 'bubble' ? '.msg .bubble' : CS_FONT_SELECTOR;
   return csForceImportant(`${target} { ${text} }`);
 }
@@ -9631,15 +9650,23 @@ function csSwitchTab(mode) {
 /* 应用到全局：空输入视为清除该分类的自定义样式 */
 function csApplyCurrent() {
   /* 只读取“当前分类”自己的草稿，另一个分类的代码绝不会被顺手带进来 */
-  const css = csBuildCSS(csGetDraft(csTab), csTab);
+  const raw = String(csGetDraft(csTab) || '').trim();
+  const css = csBuildCSS(raw, csTab);
+  /* 字体分类里写了内容却解析不出 CSS：多半是既没有字体链接、也不是合法属性，提示而不是静默清空 */
+  if (raw && !css && csTab !== 'bubble') {
+    csSetStatus('error', '❌ 未在输入内容中识别到有效的字体链接');
+    showToast('未在输入内容中识别到有效的字体链接');
+    return;
+  }
   const cs = state.beautify.customStyle;
   cs.applied[csTab] = css;
   cs.tab = csTab;
   persist();
   customStyleMirror();
   csApplyInlineDeferred();   /* 超大字体异步注入，防止阻塞主线程 */
+  if (css.indexOf('@font-face') !== -1) csWarnIfFontNotLoaded(css);
   /* 方便排查：控制台能直接看到真正注入到 head 的最终 CSS */
-  console.info('[样式自定义] 已注入 #custom-style-injector-font，长度 ' + css.length + '\n' + css);
+  console.info('[样式自定义] 已注入 #custom-style-injector-' + csTab + '，长度 ' + css.length + '\n' + css);
   showToast(css ? '已应用到全局' : '已清除该分类的自定义样式');
 }
 
@@ -9661,11 +9688,18 @@ async function csApplyGuarded() {
     showToast('请输入代码');
     return;
   }
-  /* 智能解析：链接 / 完整 CSS 原样注入，纯属性自动包裹 */
+  /* 智能解析：字体链接 / 完整 CSS 原样注入，纯属性自动包裹 */
   const css = csBuildCSS(raw, csTab);
+  /* 字体链接是否命中：混在说明文字里也算，用于给出一条更明确的成功提示 */
+  const isFontLink = csTab !== 'bubble' && !/\{/.test(raw) && !!csFontUrlOf(raw);
   if (!css) {
-    csSetStatus('error', '❌ 请输入代码');
-    showToast('请输入代码');
+    if (csTab !== 'bubble') {
+      csSetStatus('error', '❌ 未在输入内容中识别到有效的字体链接');
+      showToast('未在输入内容中识别到有效的字体链接');
+    } else {
+      csSetStatus('error', '❌ 请输入代码');
+      showToast('请输入代码');
+    }
     return;
   }
 
@@ -9695,9 +9729,17 @@ async function csApplyGuarded() {
   persist();
   customStyleMirror();
   csApplyInlineDeferred();   /* 超大字体异步注入，防止阻塞主线程 */
+  if (css.indexOf('@font-face') !== -1) csWarnIfFontNotLoaded(css);
   console.info('[样式自定义] 已注入 #custom-style-injector-' + csTab + '，长度 ' + css.length + '\n' + css);
 
-  /* 4) 类名校验：命中需求指定的三个类名，或项目真实在用的 .bubble / .chat-text，即算作用到气泡上 */
+  /* 4) 结果提示：按分类隔离。
+     字体分类只要语法通过、外链可访问就是成功，绝不做 .msg / .bubble 命中检测；
+     只有气泡分类才需要判断是否命中了真实气泡类名 */
+  if (csTab !== 'bubble') {
+    csSetStatus('ok', isFontLink ? '✅ 字体链接已成功解析并应用' : '✅ 应用成功！');
+    showToast('已应用到全局');
+    return;
+  }
   if (/(?:^|[^\w.-])\.\s*(message-sent|message-received|message-bubble|bubble|chat-text)\b/.test(css)) {
     csSetStatus('ok', '✅ 应用成功！');
     showToast('已应用到全局');
@@ -12194,7 +12236,6 @@ function renderSub(name) {
     case 'pat': return renderPatPage();
     case 'pet': return renderPetPage();
     case 'wordcloud': return renderWordCloudPage();  /* 互动词云：聊天页快捷菜单进入 */
-    case 'mood-history': return renderMoodHistoryPage();  /* 心情历史：从「记录心情」弹窗标题右侧进入 */
     case 'play': return renderPlayPage();            /* 一起玩：一起做 → 一起玩 → 五子棋 的二级页 */
     case 'games': return renderPlayPage();           /* 旧路由兜底：桌面小游戏已并入【一起玩】 */
     case 'badminton': return renderBadmintonPage();  /* 一起玩 → 赛博羽毛球 */
