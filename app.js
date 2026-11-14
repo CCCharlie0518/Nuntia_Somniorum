@@ -2,7 +2,7 @@
 'use strict';
 
 /* 全局版本号：显示在设置页最底部；日后发版只需改这一处 */
-const APP_VERSION = 'v9.2.0';
+const APP_VERSION = 'v9.2.1';
 
 /* 留影时刻：单次可截取的消息条数上限。
  * 原默认上限仅 20 条，现放宽到 100 条（仍保留硬上限防止极端长图把手机 canvas 撑爆）。 */
@@ -12608,52 +12608,96 @@ function wcCleanup() {
   }
 }
 
-/* ===== TA的观察笔记：localStorage 独立保存，避免聊天持久化失败时弄丢记录 ===== */
+/* ===== TA的观察笔记：localStorage 独立保存，避免聊天持久化失败时弄丢记录 =====
+ * 存储结构改为「计数字典」：{ catchphrases: { '好耶': 3 }, quotes: { '特鲁先生是狼人喵': 2 } }
+ * 只有说过 2 次及以上的词条才会展示，偶尔说一次的直接过滤 */
 const OBSERVATION_STORAGE_KEY = 'ta-observation-notes-v1';
 const OBSERVATION_INVALID_RE = /^(?:嗯+|啊+|哦+|噢+|额+|呃+|唉+|哎+|哼+|哈+|呵+|嘿+|嘻+|唔+)$/;
-/* 观察笔记单次渲染的节点上限：存储仍各留 30 条，只限制 DOM 数量 */
-const OBS_TAG_RENDER_MAX = 20;    /* 口头禅胶囊最多渲染 20 个 */
-const OBS_QUOTE_RENDER_MAX = 15;  /* 长句列表最多渲染 15 条 */
+const OBS_MIN_COUNT = 2;     /* 高频门槛：至少出现 2 次才允许展示 */
+const OBS_RENDER_MAX = 15;   /* 口头禅 / 长句两个列表各最多展示 15 条最高频数据 */
+const OBS_STORE_MAX = 100;   /* 存储上限：各保留频次最高的 100 条，防止字典无限膨胀 */
 
 /* 去掉标点、空白、换行与 emoji，只保留文字和数字；纯表情清洗后自然变成空串 */
 function cleanObservationText(text) {
   return String(text == null ? '' : text).normalize('NFKC').replace(/[^\p{L}\p{N}]/gu, '');
 }
 
+/* 并入计数字典：长度符合、非空、非无效语气词才累加 */
+function observationBump(bucket, text, min, max, step) {
+  if (typeof text !== 'string') return;
+  const clean = text.trim();
+  const len = Array.from(clean).length;
+  if (len < min || len > max) return;
+  if (OBSERVATION_INVALID_RE.test(clean)) return;
+  const add = Math.max(0, Math.floor(Number(step) || 0));
+  if (!add) return;
+  bucket[clean] = (bucket[clean] || 0) + add;
+}
+
+/* 读取并归一化成计数字典：
+ * - 新版对象结构直接沿用；
+ * - 旧版数组里每条只代表「出现过一次」，按 1 次转换后立刻丢弃不足 2 次的条目，
+ *   等于自动清理历史脏数据、从零开始准确统计。 */
 function readObservationNotes() {
   let raw = null;
   try { raw = JSON.parse(localStorage.getItem(OBSERVATION_STORAGE_KEY) || 'null'); } catch (err) { raw = null; }
   const source = raw && typeof raw === 'object' ? raw : {};
-  const cleanList = (list, min, max) => {
-    const out = [];
-    (Array.isArray(list) ? list : []).forEach(item => {
-      if (typeof item !== 'string') return;
-      const text = item.trim();
-      const len = Array.from(text).length;
-      if (len >= min && len <= max && !out.includes(text)) out.push(text);
-    });
-    return out.slice(0, 30);
+  const toCounts = (src, min, max) => {
+    const out = Object.create(null);
+    if (Array.isArray(src)) {
+      src.forEach(item => observationBump(out, item, min, max, 1));
+      Object.keys(out).forEach(w => { if (out[w] < OBS_MIN_COUNT) delete out[w]; });
+      return out;
+    }
+    if (src && typeof src === 'object') {
+      Object.keys(src).forEach(word => observationBump(out, word, min, max, src[word]));
+    }
+    return out;
   };
   return {
-    catchphrases: cleanList(source.catchphrases, 2, 6),
-    quotes: cleanList(source.quotes, 7, Infinity)
+    catchphrases: toCounts(source.catchphrases, 2, 6),
+    quotes: toCounts(source.quotes, 7, Infinity)
   };
 }
 
-/* 主聊天发送入口调用：2~6 字记为口头禅，超过 6 字记为摘抄；去重且各留最新 30 条 */
+/* 计数字典 → [[文字, 次数], ...]：按次数从高到低排序（同次数时短词优先），
+ * 渲染、删除定位与存储裁剪共用这一份排序结果 */
+function observationEntries(bucket) {
+  return Object.keys(bucket || {})
+    .filter(w => bucket[w] >= OBS_MIN_COUNT)
+    .map(w => [w, bucket[w]])
+    .sort((a, b) => b[1] - a[1] || a[0].length - b[0].length);
+}
+
+/* 落盘：按次数降序只保留各列表前 OBS_STORE_MAX 条。
+ * 注意这里绝不能套用展示用的 >= 2 门槛，否则计数 1 的条目写不进去，
+ * 下次再读到又会从 0 重新计数，永远累加不到 2。 */
+function writeObservationNotes(notes) {
+  const out = { catchphrases: {}, quotes: {} };
+  ['catchphrases', 'quotes'].forEach(kind => {
+    const bucket = notes[kind] || {};
+    Object.keys(bucket)
+      .filter(w => bucket[w] > 0)
+      .sort((a, b) => bucket[b] - bucket[a] || a.length - b.length)
+      .slice(0, OBS_STORE_MAX)
+      .forEach(text => { out[kind][text] = bucket[text]; });
+  });
+  try { localStorage.setItem(OBSERVATION_STORAGE_KEY, JSON.stringify(out)); } catch (err) { /* 存储不可用时仅跳过持久化 */ }
+}
+
+/* 主聊天发送入口调用：只做一次计数累加，不写 DOM、不做渲染，
+ * 开销仅一次小对象读写，不影响消息发送速度 */
 function recordObservationText(text) {
   const clean = cleanObservationText(text);
   const len = Array.from(clean).length;
   if (len < 2 || OBSERVATION_INVALID_RE.test(clean)) return;
-  const notes = readObservationNotes();
   const key = len <= 6 ? 'catchphrases' : 'quotes';
-  if (notes[key].includes(clean)) return;
-  notes[key].unshift(clean);
-  notes[key] = notes[key].slice(0, 30);
-  try { localStorage.setItem(OBSERVATION_STORAGE_KEY, JSON.stringify(notes)); } catch (err) { /* 存储不可用时仅跳过本次记录 */ }
+  const notes = readObservationNotes();
+  notes[key][clean] = (notes[key][clean] || 0) + 1;
+  writeObservationNotes(notes);
 }
 
-/* 词条右侧的删除小叉：kind = catchphrases / quotes，idx 为当前渲染数组下标 */
+/* 词条右侧的删除小叉：kind = catchphrases / quotes，idx 为当前展示列表下标 */
 function observationDelBtnHTML(kind, idx, label) {
   return `<button type="button" class="observation-del" data-obs-kind="${kind}" data-obs-idx="${idx}" aria-label="删除${esc(label)}">×</button>`;
 }
@@ -12662,21 +12706,21 @@ function renderObservationNotes() {
   const root = $('#observationNotes');
   if (!root) return;
   const notes = readObservationNotes();
-  const hasNotes = notes.catchphrases.length || notes.quotes.length;
-  /* 只渲染有限条数，避免几十个节点把页面撑长、拖慢滚动；数据本身仍完整保留 */
-  const tags = notes.catchphrases.slice(0, OBS_TAG_RENDER_MAX);
-  const quotes = notes.quotes.slice(0, OBS_QUOTE_RENDER_MAX);
+  /* 只展示高频词条（>= 2 次），并按次数降序，各取前 15 条 */
+  const tags = observationEntries(notes.catchphrases).slice(0, OBS_RENDER_MAX);
+  const quotes = observationEntries(notes.quotes).slice(0, OBS_RENDER_MAX);
+  const hasNotes = tags.length || quotes.length;
   const content = hasNotes ? `
     <div class="observation-note-block">
       <div class="observation-note-label">你的口头禅</div>
       ${tags.length
-        ? `<div class="observation-tags">${tags.map((text, i) => `<span class="observation-tag">${esc(text)}${observationDelBtnHTML('catchphrases', i, '这句口头禅')}</span>`).join('')}</div>`
+        ? `<div class="observation-tags">${tags.map(([text], i) => `<span class="observation-tag">${esc(text)}${observationDelBtnHTML('catchphrases', i, '这句口头禅')}</span>`).join('')}</div>`
         : '<div class="observation-mini-empty">还没有偷学到口头禅</div>'}
     </div>
     <div class="observation-note-block">
       <div class="observation-note-label">你爱说的话</div>
       ${quotes.length
-        ? `<ul class="observation-quotes">${quotes.map((text, i) => `<li class="observation-quote"><span class="observation-quote-text">${esc(text)}</span>${observationDelBtnHTML('quotes', i, '这句话')}</li>`).join('')}</ul>`
+        ? `<ul class="observation-quotes">${quotes.map(([text], i) => `<li class="observation-quote"><span class="observation-quote-text">${esc(text)}</span>${observationDelBtnHTML('quotes', i, '这句话')}</li>`).join('')}</ul>`
         : '<div class="observation-mini-empty">还没有偷学到长句子</div>'}
     </div>` : '<div class="observation-empty">他还在默默观察你……</div>';
   root.innerHTML = `
@@ -12698,34 +12742,37 @@ function onObservationDeleteClick(e) {
   e.preventDefault();
   const kind = btn.dataset.obsKind === 'quotes' ? 'quotes' : 'catchphrases';
   const idx = Number(btn.dataset.obsIdx);
-  const text = readObservationNotes()[kind][idx];
-  if (text === undefined) return;
+  /* 与渲染时同一套排序 + 截取，保证下标对得上点中的那一条 */
+  const entry = observationEntries(readObservationNotes()[kind]).slice(0, OBS_RENDER_MAX)[idx];
+  if (!entry) return;
+  const text = entry[0];
   confirmDialog('确定要让他忘掉吗？', `确定要让他忘掉「${text}」吗？`, '忘掉', true).then(ok => {
     if (ok) removeObservationEntry(kind, text);
   });
 }
 
-/* 按内容过滤而不是按下标删除：即使期间有新记录写入，也只会移除点中的那一条 */
+/* 按文字删除词条（不是按下标），删完立刻落盘并只重绘笔记区域 */
 function removeObservationEntry(kind, text) {
   const notes = readObservationNotes();
-  const next = notes[kind].filter(item => item !== text);
-  if (next.length === notes[kind].length) return;
-  notes[kind] = next;
-  try { localStorage.setItem(OBSERVATION_STORAGE_KEY, JSON.stringify(notes)); } catch (err) { /* 存储不可用时仅跳过持久化 */ }
+  if (!notes[kind] || notes[kind][text] === undefined) return;
+  delete notes[kind][text];
+  writeObservationNotes(notes);
   renderObservationNotes();
   showToast('已让他忘记这句话');
 }
 
 /* 模仿回复：只在【观察笔记】里抽取，词云数据完全不参与。
- * 命中概率后 50% 抽长句、50% 抽口头禅；所选数组为空则交叉兜底；
- * 两个数组都为空（或概率为 0）返回空串，由调用方降级为正常字卡回复。 */
+ * 命中概率后 50% 抽长句、50% 抽口头禅；所选列表为空则交叉兜底；
+ * 两边都没有达到门槛的高频词时返回空串，由调用方降级为正常字卡回复。 */
 function pickImitationReply() {
   const chance = clamp(Number(state.settings.imitateChance ?? 10), 0, 100);
   if (!(chance > 0) || Math.random() * 100 >= chance) return '';
   const notes = readObservationNotes();
+  const quotes = observationEntries(notes.quotes).map(([text]) => text);
+  const catchphrases = observationEntries(notes.catchphrases).map(([text]) => text);
   const preferQuotes = Math.random() < 0.5;
-  const first = preferQuotes ? notes.quotes : notes.catchphrases;
-  const second = preferQuotes ? notes.catchphrases : notes.quotes;
+  const first = preferQuotes ? quotes : catchphrases;
+  const second = preferQuotes ? catchphrases : quotes;
   const pool = first.length ? first : second;
   return pool.length ? pickOne(pool) : '';
 }
